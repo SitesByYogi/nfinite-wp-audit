@@ -132,10 +132,10 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
         return $base;
     };
 
-    $by_slug     = array();
-    $used_rest   = false;
-    $used_local  = false;
-    $used_reflect= false;
+    $by_slug      = array();
+    $used_rest    = false;
+    $used_local   = false;
+    $used_reflect = false;
 
     // ---------------- collect via internal REST (when routes exist) ----------------
     $routes_have_tests = false;
@@ -171,59 +171,50 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
         };
 
         // Collect function that supports both REST response shapes:
-        // A) flat list of tests, or B) grouped object with {critical|recommended|good} -> tests[]
+        // (A) flat list of tests, or (B) grouped object with {critical|recommended|good} -> ['tests'=>[...]]
         $collect = function($payload) use ($normalize) {
             $tmp = array();
             if ( ! is_array($payload) ) return $tmp;
 
-            // Detect flat list quickly
-            $is_flat = false;
-            foreach ($payload as $k => $maybe) {
-                if (is_array($maybe) && (isset($maybe['status']) || isset($maybe['label']) || isset($maybe['test']) || isset($maybe['slug']))) {
-                    $is_flat = true; break;
-                }
-            }
+            // Detect grouped shape explicitly.
+            $is_grouped =
+                ( isset($payload['critical'])    && is_array($payload['critical'])    && isset($payload['critical']['tests']) )
+             || ( isset($payload['recommended']) && is_array($payload['recommended']) && isset($payload['recommended']['tests']) )
+             || ( isset($payload['good'])        && is_array($payload['good'])        && isset($payload['good']['tests']) );
 
-            if ($is_flat) {
-                $i = 0;
-                foreach ($payload as $k => $result) {
-                    if (!is_array($result)) continue;
-                    $slug = null;
-                    if (is_string($k) && $k !== '' && !is_numeric($k)) {
-                        $slug = $k;
-                    } elseif (!empty($result['test']) && is_string($result['test'])) {
-                        $slug = $result['test'];
-                    } elseif (!empty($result['slug']) && is_string($result['slug'])) {
-                        $slug = $result['slug'];
+            if ( $is_grouped ) {
+                foreach ( array('critical','recommended','good') as $grp ) {
+                    if ( isset($payload[$grp]['tests']) && is_array($payload[$grp]['tests']) ) {
+                        $i = 0;
+                        foreach ( $payload[$grp]['tests'] as $result ) {
+                            if ( ! is_array($result) ) continue;
+                            if ( ! isset($result['status']) ) $result['status'] = $grp;
+                            // slug
+                            if ( ! empty($result['test']) && is_string($result['test']) ) {
+                                $slug = $result['test'];
+                            } elseif ( ! empty($result['slug']) && is_string($result['slug']) ) {
+                                $slug = $result['slug'];
+                            } else {
+                                $slug = "{$grp}_{$i}";
+                            }
+                            $tmp[$slug] = $normalize($slug, $result);
+                            $i++;
+                        }
                     }
-                    if (!$slug) $slug = 'test_' . $i++;
-                    $tmp[$slug] = $normalize($slug, $result);
                 }
                 return $tmp;
             }
 
-            // Grouped shape: e.g.
-            // [ 'critical' => ['tests'=>[...]], 'recommended'=>['tests'=>[...]], 'good'=>['tests'=>[...]] ]
-            foreach (array('critical','recommended','good') as $grp) {
-                if (isset($payload[$grp]['tests']) && is_array($payload[$grp]['tests'])) {
-                    $i = 0;
-                    foreach ($payload[$grp]['tests'] as $result) {
-                        if (!is_array($result)) continue;
-                        if (!isset($result['status'])) $result['status'] = $grp;
-                        $slug = '';
-                        if (!empty($result['test']) && is_string($result['test'])) {
-                            $slug = $result['test'];
-                        } elseif (!empty($result['slug']) && is_string($result['slug'])) {
-                            $slug = $result['slug'];
-                        } else {
-                            $slug = "{$grp}_{$i}";
-                        }
-                        $tmp[$slug] = $normalize($slug, $result);
-                        $i++;
-                    }
-                }
+            // Otherwise, treat as a flat list of tests.
+            $i = 0;
+            foreach ( $payload as $k => $result ) {
+                if ( ! is_array($result) ) continue;
+                $slug = ( is_string($k) && $k !== '' && ! is_numeric($k) )
+                    ? $k
+                    : ( ! empty($result['test']) && is_string($result['test']) ? $result['test']
+                        : ( ! empty($result['slug']) && is_string($result['slug']) ? $result['slug'] : 'test_' . $i++ ) );
+                $tmp[$slug] = $normalize($slug, $result);
             }
-
             return $tmp;
         };
 
@@ -253,10 +244,11 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
         if ( empty($def['test']) ) return null;
         $cb = $def['test'];
         if ( is_callable($cb) ) return call_user_func($cb);
-        if ( is_string($cb) && method_exists($health, $cb) && is_callable(array($health, $cb)) ) {
-            return call_user_func(array($health, $cb));
+        // Allow calling public instance methods on $health.
+        if ( is_string($cb) && method_exists($health, $cb) ) {
+            try { return call_user_func(array($health, $cb)); } catch (Throwable $e) { return null; }
         }
-        return null; // never call private perform_test
+        return null; // never call private/protected perform_test
     };
 
     $tmp_local = array();
@@ -264,12 +256,12 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
         if ( $type === 'async' && ! $include_async ) continue;
         if ( isset($tests[$type]) && is_array($tests[$type]) ) {
             $i = 0;
-            foreach ($tests[$type] as $k => $def) {
+            foreach ( $tests[$type] as $k => $def ) {
                 try { $res = $run_callable($def); } catch (Throwable $e) { $res = null; }
                 if ( is_array($res) ) {
-                    $slug = (is_string($k) && $k !== '' && ! is_numeric($k))
+                    $slug = ( is_string($k) && $k !== '' && ! is_numeric($k) )
                         ? $k
-                        : ((!empty($def['test']) && is_string($def['test'])) ? $def['test'] : ('local_' . $i++));
+                        : ( ! empty($def['test']) && is_string($def['test']) ? $def['test'] : ('local_' . $i++) );
                     $tmp_local[$slug] = $normalize($slug, $res);
                 }
             }
@@ -291,8 +283,8 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
             if ( $i > 200 ) break;
             try { $res = call_user_func( array($health, $m) ); } catch (Throwable $e) { $res = null; }
             if ( is_array($res) ) {
-                $slug         = 'reflect_' . substr($m, 9); // after "get_test_"
-                $tmp_ref[$slug] = $normalize($slug, $res);
+                $slug            = 'reflect_' . substr($m, 9); // after "get_test_"
+                $tmp_ref[$slug]  = $normalize($slug, $res);
             }
             $i++;
         }
