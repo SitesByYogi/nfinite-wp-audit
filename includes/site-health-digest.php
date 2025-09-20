@@ -2,22 +2,35 @@
 if ( ! defined('ABSPATH') ) exit;
 
 /**
- * Nfinite: Site Health Digest (REST-based)
- * - Pulls tests from /wp-json/wp-site-health/v1/tests/{direct|async}
- * - Filters to a curated set, normalizes, caches
+ * Nfinite: Site Health Digest (safe runner)
+ * - Executes a curated subset of Site Health "direct" tests.
+ * - No calls to private WP_Site_Health::perform_test().
+ * - Falls back to running all direct tests if curated slugs don't exist.
+ * - Cached briefly with a transient.
  */
-function nfinite_get_site_health_digest( $force_refresh = false, $include_async = true ) {
-    if ( ! current_user_can('view_site_health_checks') ) {
-        return array('error' => __('You do not have permission to view Site Health checks.', 'nfinite-audit'));
+function nfinite_get_site_health_digest( $force_refresh = false ) {
+    // Allow either capability; older WP sites may not map 'view_site_health_checks'
+    if ( ! current_user_can('view_site_health_checks') && ! current_user_can('manage_options') ) {
+        return array(
+            'error' => __('You do not have permission to view Site Health checks.', 'nfinite-audit')
+        );
     }
 
-    $cache_key = 'nfinite_site_health_digest' . ( $include_async ? '_with_async' : '' );
+    $cache_key = 'nfinite_site_health_digest_v2';
     if ( ! $force_refresh ) {
-        $cached = get_transient($cache_key);
+        $cached = get_transient( $cache_key );
         if ( $cached ) return $cached;
     }
 
-    // Curate the “important” tests (slugs in WP core registry)
+    if ( ! class_exists('WP_Site_Health') ) {
+        require_once ABSPATH . 'wp-admin/includes/class-wp-site-health.php';
+    }
+
+    $health = new WP_Site_Health();
+    $tests  = $health->get_tests();
+
+    // Curate the “important” core tests. Some slugs vary across WP versions,
+    // so we add a few aliases and also have a fallback below.
     $wanted_slugs = array(
         'https_status',
         'ssl_support',
@@ -26,105 +39,107 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
         'dotorg_communication',
         'background_updates',
         'php_version',
-        'sql_server',              // note: on some installs this can be 'database_server'; we map below
-        'database_server',
+        'sql_server',           // aka mysql_server in older versions
+        'mysql_server',
         'plugin_version',
         'theme_version',
         'persistent_object_cache',
         'is_in_debug_mode',
         'timezone',
+        'utf8mb4_support',      // present on many installs
+        'theme_supports_php',   // appears on newer installs
     );
 
-    $nonce   = wp_create_nonce('wp_rest');
-    $headers = array('X-WP-Nonce' => $nonce);
-    $items   = array();
-
-    // Helper to fetch a test set and merge
-    $fetch = function( $type ) use ( $headers, $wanted_slugs ) {
-        $url  = rest_url('wp-site-health/v1/tests/' . $type);
-        $res  = wp_remote_get( $url, array('headers' => $headers, 'timeout' => 15) );
-        if ( is_wp_error($res) ) return array();
-        $code = wp_remote_retrieve_response_code($res);
-        if ( 200 !== (int)$code ) return array();
-
-        $body = json_decode( wp_remote_retrieve_body($res), true );
-        if ( ! is_array($body) ) return array();
-
-        $out = array();
-        foreach ( $body as $slug => $result ) {
-            // Normalize slug variants
-            $norm_slug = $slug;
-            if ( 'database_server' === $slug ) $norm_slug = 'sql_server';
-
-            if ( ! in_array($norm_slug, $wanted_slugs, true) ) continue;
-            if ( ! is_array($result) ) continue;
-
-            $status = isset($result['status']) ? $result['status'] : 'recommended'; // 'good' | 'recommended' | 'critical'
-            $label  = isset($result['label'])  ? $result['label']  : ucfirst(str_replace('_',' ', $norm_slug));
-
-            $out[] = array(
-                'slug'        => $norm_slug,
-                'status'      => $status,
-                'label'       => $label,
-                'description' => isset($result['description']) ? wp_kses_post($result['description']) : '',
-                'badge'       => isset($result['badge']['label']) ? sanitize_text_field($result['badge']['label']) : '',
-                'actions'     => isset($result['actions']) ? wp_kses_post($result['actions']) : '',
-                // keep the source type if you want to display it (optional)
-                '_source'     => $type,
-            );
-        }
-        return $out;
+    $normalize = function( $slug, $result ) {
+        return array(
+            'slug'        => sanitize_key( $slug ),
+            'status'      => isset($result['status']) ? $result['status'] : 'recommended', // good | recommended | critical
+            'label'       => isset($result['label']) ? wp_strip_all_tags($result['label']) : ucfirst(str_replace('_',' ', $slug)),
+            'description' => isset($result['description']) ? wp_kses_post($result['description']) : '',
+            'badge'       => isset($result['badge']['label']) ? sanitize_text_field($result['badge']['label']) : '',
+            'actions'     => isset($result['actions']) ? wp_kses_post($result['actions']) : '',
+        );
     };
 
-    // Always fetch "direct"
-    $items = array_merge( $items, $fetch('direct') );
+    // Safe runner that never calls private perform_test()
+    $run_test = function( $test_def ) use ( $health ) {
+        if ( empty($test_def['test']) ) return null;
+        $cb = $test_def['test'];
 
-    // Optionally fetch and merge "async" (some sites put important results there)
-    if ( $include_async ) {
-        $items = array_merge( $items, $fetch('async') );
-        // Deduplicate by slug, prefer direct over async
-        $seen = array();
-        $items = array_values(array_filter($items, function($it) use (&$seen) {
-            if ( isset($seen[$it['slug']]) ) return false;
-            $seen[$it['slug']] = true;
-            return true;
-        }));
+        // If a global callable/closure
+        if ( is_callable( $cb ) ) {
+            return call_user_func( $cb );
+        }
+
+        // If it's a method name on WP_Site_Health, make sure it's callable (not private)
+        if ( is_string( $cb ) && method_exists( $health, $cb ) ) {
+            // is_callable will be false for private/protected methods — perfect.
+            if ( is_callable( array( $health, $cb ) ) ) {
+                return call_user_func( array( $health, $cb ) );
+            }
+        }
+
+        return null; // Unsupported test shape
+    };
+
+    $items = array();
+    $direct = is_array( $tests ) && isset( $tests['direct'] ) && is_array( $tests['direct'] ) ? $tests['direct'] : array();
+
+    // 1) Try curated slugs first
+    foreach ( $direct as $slug => $def ) {
+        if ( ! in_array( $slug, $wanted_slugs, true ) ) continue;
+        $result = $run_test( $def );
+        if ( is_array( $result ) ) $items[] = $normalize( $slug, $result );
     }
 
-    // Fallback note if nothing came back
-    if ( empty($items) ) {
-        // If REST is blocked, let the user know rather than showing an empty box
-        $rest_status = function_exists('rest_url') ? rest_url() : '';
+    // 2) Fallback: if nothing matched (version mismatch), run a subset of *all* direct tests
+    if ( empty( $items ) && $direct ) {
+        $count = 0;
+        foreach ( $direct as $slug => $def ) {
+            $result = $run_test( $def );
+            if ( is_array( $result ) ) {
+                $items[] = $normalize( $slug, $result );
+                if ( ++$count >= 12 ) break; // keep it snappy
+            }
+        }
+    }
+
+    if ( empty( $items ) ) {
+        // Return a helpful error rather than an empty set
         return array(
-            'items'      => array(),
-            'refreshed'  => current_time('mysql'),
-            'site'       => get_bloginfo('name'),
-            'error'      => sprintf(__('No Site Health results were returned. If this persists, check that REST API is enabled for logged-in users (URL: %s).', 'nfinite-audit'), esc_html($rest_status))
+            'error' => __(
+                'No Site Health results were returned. This can happen if a security plugin blocks loopback/REST requests or if tests are unavailable on this WordPress version. Open Tools → Site Health in another tab to confirm tests run, and ensure REST is reachable for logged-in users.',
+                'nfinite-audit'
+            )
         );
     }
 
-    // Sort: critical → recommended → good → then by label
-    usort($items, function($a,$b){
-        $order = array('critical'=>0,'recommended'=>1,'good'=>2);
-        $ac = $order[$a['status']] ?? 9;
-        $bc = $order[$b['status']] ?? 9;
-        if ($ac === $bc) return strcasecmp($a['label'], $b['label']);
+    // Sort: critical → recommended → good, then by label
+    usort( $items, function( $a, $b ) {
+        $order = array('critical'=>0, 'recommended'=>1, 'good'=>2);
+        $ac = $order[ $a['status'] ] ?? 9;
+        $bc = $order[ $b['status'] ] ?? 9;
+        if ( $ac === $bc ) return strcasecmp( $a['label'], $b['label'] );
         return $ac <=> $bc;
     });
 
     $payload = array(
-        'items'      => $items,
-        'refreshed'  => current_time('mysql'),
-        'site'       => get_bloginfo('name'),
+        'items'     => $items,
+        'refreshed' => current_time('mysql'),
+        'site'      => get_bloginfo('name'),
     );
 
-    set_transient( $cache_key, $payload, 15 * MINUTE_IN_SECONDS );
+    // Cache briefly (5 minutes). Your UI can pass $force_refresh=true to bypass.
+    set_transient( $cache_key, $payload, 5 * MINUTE_IN_SECONDS );
+
     return $payload;
 }
 
-/** Map Site Health status to badge classes for UI */
+/**
+ * Optional: tiny helper for status → CSS class
+ */
 function nfinite_health_status_class( $status ) {
-    switch ($status) {
+    switch ( $status ) {
         case 'critical':    return 'nfinite-badge nfinite-badge-danger';
         case 'recommended': return 'nfinite-badge nfinite-badge-warn';
         default:            return 'nfinite-badge nfinite-badge-good';
