@@ -3,33 +3,78 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 
 class Nfinite_Audit_Admin {
 
+    /**
+     * Boot
+     */
     public static function init() {
-        add_action('admin_menu', array(__CLASS__, 'menu'));
+        add_action('admin_menu',              array(__CLASS__, 'menu'));
+        add_action('admin_init',              array(__CLASS__, 'register_settings'));
+        add_action('admin_enqueue_scripts',   array(__CLASS__, 'enqueue_admin_css'));
+
+        // Actions
         add_action('admin_post_nfinite_run_audit_now', array(__CLASS__, 'handle_run_audit'));
-        add_action('admin_init', array(__CLASS__, 'register_settings'));
-        add_action('admin_enqueue_scripts', array(__CLASS__, 'enqueue_admin_css'));
+
+        // AJAX
         add_action('wp_ajax_nfinite_test_psi', array(__CLASS__, 'ajax_test_psi'));
     }
 
+    /**
+     * Admin Menu
+     */
     public static function menu() {
-        add_menu_page('Nfinite Audit','Nfinite Audit','manage_options','nfinite-audit',array(__CLASS__,'render_dashboard_page'),'dashicons-search',59);
-        add_submenu_page('nfinite-audit','Dashboard · Nfinite Audit','Dashboard','manage_options','nfinite-audit',array(__CLASS__,'render_dashboard_page'));
-        add_submenu_page('nfinite-audit','Settings · Nfinite Audit','Settings','manage_options','nfinite-audit-settings',array(__CLASS__,'render_settings_page'));
-    
+        add_menu_page(
+            'Nfinite Audit',
+            'Nfinite Audit',
+            'manage_options',
+            'nfinite-audit',
+            array(__CLASS__, 'render_dashboard_page'),
+            'dashicons-search',
+            59
+        );
 
-}
+        // Keep a Dashboard submenu (mirrors top-level)
+        add_submenu_page(
+            'nfinite-audit',
+            'Dashboard · Nfinite Audit',
+            'Dashboard',
+            'manage_options',
+            'nfinite-audit',
+            array(__CLASS__, 'render_dashboard_page')
+        );
 
+        // Settings
+        add_submenu_page(
+            'nfinite-audit',
+            'Settings · Nfinite Audit',
+            'Settings',
+            'manage_options',
+            'nfinite-audit-settings',
+            array(__CLASS__, 'render_settings_page')
+        );
+    }
 
+    /**
+     * Settings
+     */
     public static function register_settings() {
-        register_setting('nfinite_audit_group', 'nfinite_psi_api_key', array('type'=>'string','sanitize_callback'=>'sanitize_text_field'));
-        register_setting('nfinite_audit_group', 'nfinite_proxy_url',   array('type'=>'string','sanitize_callback'=>'esc_url_raw'));
-        register_setting('nfinite_audit_group', 'nfinite_test_url',    array('type'=>'string','sanitize_callback'=>'esc_url_raw'));
+        register_setting('nfinite_audit_group', 'nfinite_psi_api_key', array(
+            'type'              => 'string',
+            'sanitize_callback' => 'sanitize_text_field',
+        ));
+        register_setting('nfinite_audit_group', 'nfinite_proxy_url', array(
+            'type'              => 'string',
+            'sanitize_callback' => 'esc_url_raw',
+        ));
+        register_setting('nfinite_audit_group', 'nfinite_test_url', array(
+            'type'              => 'string',
+            'sanitize_callback' => 'esc_url_raw',
+        ));
 
         add_settings_section(
             'nfinite_audit_section_keys',
             'API & Connection',
             function () {
-                echo '<p>Provide your API key and (optionally) a proxy endpoint if you use one. The Test URL is used on the dashboard.</p>';
+                echo '<p>Provide your API key and (optionally) a proxy endpoint if you use one. The Default Test URL is used on the dashboard.</p>';
             },
             'nfinite-audit-settings'
         );
@@ -40,7 +85,7 @@ class Nfinite_Audit_Admin {
             array(__CLASS__, 'field_text'),
             'nfinite-audit-settings',
             'nfinite_audit_section_keys',
-            array('option'=>'nfinite_psi_api_key','placeholder'=>'AIza...')
+            array('option' => 'nfinite_psi_api_key', 'placeholder' => 'AIza...')
         );
 
         add_settings_field(
@@ -49,7 +94,7 @@ class Nfinite_Audit_Admin {
             array(__CLASS__, 'field_text'),
             'nfinite-audit-settings',
             'nfinite_audit_section_keys',
-            array('option'=>'nfinite_proxy_url','placeholder'=>'https://your-proxy.example.com/psi')
+            array('option' => 'nfinite_proxy_url', 'placeholder' => 'https://your-proxy.example.com/psi')
         );
 
         add_settings_field(
@@ -58,14 +103,17 @@ class Nfinite_Audit_Admin {
             array(__CLASS__, 'field_text'),
             'nfinite-audit-settings',
             'nfinite_audit_section_keys',
-            array('option'=>'nfinite_test_url','placeholder'=>'https://example.com')
+            array('option' => 'nfinite_test_url', 'placeholder' => 'https://example.com')
         );
     }
 
+    /**
+     * Generic text field renderer
+     */
     public static function field_text( $args ) {
-        $option = isset($args['option']) ? $args['option'] : '';
+        $option      = isset($args['option']) ? $args['option'] : '';
         $placeholder = isset($args['placeholder']) ? $args['placeholder'] : '';
-        $value = esc_attr( get_option($option, '') );
+        $value       = esc_attr( get_option($option, '') );
         printf(
             '<input type="text" class="regular-text" name="%1$s" id="%1$s" value="%2$s" placeholder="%3$s" />',
             esc_attr($option),
@@ -74,6 +122,9 @@ class Nfinite_Audit_Admin {
         );
     }
 
+    /**
+     * Enqueue styles/scripts on plugin screens only
+     */
     public static function enqueue_admin_css( $hook ) {
         $allowed = array('toplevel_page_nfinite-audit', 'nfinite-audit_page_nfinite-audit-settings');
         if ( ! in_array($hook, $allowed, true) ) return;
@@ -81,6 +132,7 @@ class Nfinite_Audit_Admin {
         wp_enqueue_style('nfinite-admin', NFINITE_AUDIT_URL . 'assets/admin.css', array(), NFINITE_AUDIT_VER);
         wp_enqueue_script('nfinite-admin', NFINITE_AUDIT_URL . 'assets/admin.js', array('jquery'), NFINITE_AUDIT_VER, true);
 
+        // Inline CSS tokens (layout + badges + digest list)
         $css = ''
         . '.nfinite-wrap{max-width:1100px}'
         . '.nfinite-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;align-items:start}'
@@ -92,9 +144,15 @@ class Nfinite_Audit_Admin {
         . '.nfinite-score{font-size:28px;font-weight:800}'
         . '.nfinite-detail{padding:0 16px 14px 16px;border-top:1px solid #e5e7eb}'
         . '.nfinite-badge{display:inline-block;padding:4px 8px;border-radius:999px;font-weight:700;font-size:12px}'
+
+        // Grade badges (A–F) used across cards
         . '.A{background:#ecfdf5;color:#065f46}.B{background:#eff6ff;color:#1e40af}.C{background:#fef3c7;color:#92400e}.D{background:#fee2e2;color:#991b1b}.F{background:#fef2f2;color:#991b1b}'
+
+        // Section disclosure chevron
         . 'details.nfinite-card.section summary .chev{margin-left:8px;display:inline-block;transform:rotate(0deg);transition:transform .2s ease;font-size:18px;line-height:1}'
         . 'details.nfinite-card.section[open] summary .chev{transform:rotate(180deg)}'
+
+        // Inline checks + chips
         . '.nfinite-check{margin:8px 0;padding:10px;border:1px solid #e5e7eb;border-radius:10px;background:#fff}'
         . '.nfinite-check .head{display:flex;align-items:center;justify-content:space-between;gap:10px}'
         . '.nfinite-check .label{font-weight:600;color:#111827}'
@@ -103,27 +161,55 @@ class Nfinite_Audit_Admin {
         . '.nfinite-reco{margin-top:8px;padding:10px;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb}'
         . '.nfinite-help{color:#6b7280;font-size:13px;margin-top:6px}'
         . '.nfinite-section{margin-top:18px}.nfinite-section-title{margin:16px 0 8px}'
+
+        // Site Health Digest list
+        . '.nfinite-card__header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #e5e7eb}'
+        . '.nfinite-list{padding:8px 16px}'
+        . '.nfinite-list__item{padding:12px 0;border-bottom:1px solid #f1f5f9}'
+        . '.nfinite-list__item:last-child{border-bottom:none}'
+        . '.nfinite-badge-good{background:#ecfdf5;color:#065f46}'
+        . '.nfinite-badge-warn{background:#fffbeb;color:#92400e}'
+        . '.nfinite-badge-danger{background:#fef2f2;color:#991b1b}'
+        . '.nfinite-badge-muted{background:#f3f4f6;color:#374151}'
+
+        // Responsive
         . '@media (max-width:1200px){.nfinite-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}'
         . '@media (max-width:782px){.nfinite-cards,.nfinite-cards.full{grid-template-columns:1fr}}';
         wp_add_inline_style('nfinite-admin', $css);
+
+        // Localize a couple of values for assets/admin.js if needed
+        wp_localize_script('nfinite-admin', 'NFINITE_AUDIT_VARS', array(
+            'ajax_url' => admin_url('admin-ajax.php'),
+            'nonce'    => wp_create_nonce('nfinite_test_psi'),
+        ));
     }
 
-    public static function grade_badge($score){
-        $grade = Nfinite_Audit_V1::grade_from_score($score);
-        return '<span class="nfinite-badge '.$grade.'">'.$grade.'</span>';
+    /**
+     * Convert score to A–F badge (uses your existing grading helper)
+     */
+    public static function grade_badge( $score ) {
+        $grade = Nfinite_Audit_V1::grade_from_score( (int) $score );
+        return '<span class="nfinite-badge ' . esc_attr($grade) . '">' . esc_html($grade) . '</span>';
     }
 
+    /**
+     * PSI AJAX (mobile + desktop) with internal fallback
+     */
     public static function ajax_test_psi() {
-        if ( ! current_user_can('manage_options') ) wp_send_json_error(array('message'=>'Unauthorized'), 403);
+        if ( ! current_user_can('manage_options') ) wp_send_json_error(array('message' => 'Unauthorized'), 403);
         check_ajax_referer('nfinite_test_psi');
 
         $url = isset($_POST['url']) ? esc_url_raw($_POST['url']) : '';
-        if (!$url) wp_send_json_error(array('message'=>'Missing URL'), 400);
+        if ( empty($url) ) wp_send_json_error(array('message' => 'Missing URL'), 400);
 
+        // Internal baseline
         $internal = Nfinite_Audit_V1::run_internal_audit($url);
-        $api   = nfinite_clean_api_key( get_option('nfinite_psi_api_key','') );
-        $proxy = trim( (string) get_option('nfinite_proxy_url','') );
 
+        // Credentials
+        $api   = function_exists('nfinite_clean_api_key') ? nfinite_clean_api_key( get_option('nfinite_psi_api_key','') ) : get_option('nfinite_psi_api_key','');
+        $proxy = trim( (string) get_option('nfinite_proxy_url', '') );
+
+        // No PSI: estimate categories
         if ( empty($api) && empty($proxy) ) {
             $cats = function_exists('nfinite_estimate_lighthouse') ? nfinite_estimate_lighthouse($internal) : array();
             $psi_scores = array(
@@ -132,34 +218,35 @@ class Nfinite_Audit_Admin {
                 'seo'            => isset($cats['seo']) ? (int)$cats['seo'] : 0,
                 '_estimated'     => true,
             );
+
             $parts = array();
-            // include section scores
+            // Section scores
             $sections = isset($internal['sections']) ? $internal['sections'] : array();
-            if (is_array($sections)) {
-                foreach ($sections as $sec) {
-                    if (isset($sec['score'])) $parts[] = (int)$sec['score'];
+            if ( is_array($sections) ) {
+                foreach ( $sections as $sec ) {
+                    if ( isset($sec['score']) ) $parts[] = (int) $sec['score'];
                 }
             }
-            // include Lighthouse categories
-            if ( isset($psi_scores['performance']) )     $parts[] = (int)$psi_scores['performance'];
-            if ( isset($psi_scores['best_practices']) )  $parts[] = (int)$psi_scores['best_practices'];
-            if ( isset($psi_scores['seo']) )             $parts[] = (int)$psi_scores['seo'];
-            $overall_est = $parts ? (int) round(array_sum($parts)/count($parts)) : 0;
+            // Lighthouse categories
+            foreach ( array('performance','best_practices','seo') as $k ) {
+                if ( isset($psi_scores[$k]) ) $parts[] = (int) $psi_scores[$k];
+            }
+            $overall_est = $parts ? (int) round(array_sum($parts) / count($parts)) : 0;
 
             $payload = array(
-                'timestamp'    => current_time('Y-m-d H:i:s'),
-                'url'          => $url,
-                'finalUrl'     => $url,
-                'psi_ok'       => false,
-                'psi_error'    => '',
-                'psi_scores'   => $psi_scores,
-                'web_vitals'   => null,
-                'lab_metrics'  => array(),
-                'lab_overall'  => null,
-                'vitals_source'=> 'none',
-                'internal'     => $internal,
-                'overall'      => $overall_est,
-                'grade'        => Nfinite_Audit_V1::grade_from_score($overall_est),
+                'timestamp'     => current_time('Y-m-d H:i:s'),
+                'url'           => $url,
+                'finalUrl'      => $url,
+                'psi_ok'        => false,
+                'psi_error'     => '',
+                'psi_scores'    => $psi_scores,
+                'web_vitals'    => null,
+                'lab_metrics'   => array(),
+                'lab_overall'   => null,
+                'vitals_source' => 'none',
+                'internal'      => $internal,
+                'overall'       => $overall_est,
+                'grade'         => Nfinite_Audit_V1::grade_from_score($overall_est),
             );
             update_option('nfinite_audit_last', $payload, false);
 
@@ -175,113 +262,129 @@ class Nfinite_Audit_Admin {
                 'warnings' => array('Lab metrics (FCP/LCP/TBT/CLS/SI) require a PageSpeed API key or proxy.'),
                 'finalUrl' => $url,
             );
-            wp_send_json_success(array('mobile'=>$ui,'desktop'=>$ui));
+            wp_send_json_success(array('mobile' => $ui, 'desktop' => $ui));
         }
 
+        // PSI (both devices)
         $mobile  = nfinite_fetch_psi($url, $api, $proxy, 'mobile');
         $desktop = nfinite_fetch_psi($url, $api, $proxy, 'desktop');
         $primary = !empty($mobile['ok']) ? $mobile : ( !empty($desktop['ok']) ? $desktop : $mobile );
 
         $psi_ok     = !empty($primary['ok']);
         $psi_error  = $psi_ok ? '' : ( isset($primary['error']) ? $primary['error'] : 'Unknown error' );
-        $psi_scores = $psi_ok && isset($primary['scores']) ? $primary['scores'] : ( function_exists('nfinite_estimate_lighthouse') ? nfinite_estimate_lighthouse($internal) : array('performance'=>0,'best_practices'=>0,'seo'=>0,'_estimated'=>true) );
+        $psi_scores = $psi_ok && isset($primary['scores'])
+            ? $primary['scores']
+            : ( function_exists('nfinite_estimate_lighthouse') ? nfinite_estimate_lighthouse($internal) : array('performance'=>0,'best_practices'=>0,'seo'=>0,'_estimated'=>true) );
 
-        $web_vitals   = $psi_ok ? ( isset($primary['web_vitals']) ? $primary['web_vitals'] : null ) : null;
-        $lab_metrics  = $psi_ok ? ( isset($primary['lab_metrics']) ? $primary['lab_metrics'] : array() ) : array();
-        $lab_overall  = $psi_ok ? ( isset($primary['lab_overall']) ? $primary['lab_overall'] : null ) : null;
-        $vitals_src   = $psi_ok ? ( isset($primary['vitals_source']) ? $primary['vitals_source'] : 'none' ) : 'none';
-        $finalUrl     = $psi_ok ? ( isset($primary['finalUrl']) ? $primary['finalUrl'] : $url ) : $url;
+        $web_vitals  = $psi_ok ? ( $primary['web_vitals']  ?? null ) : null;
+        $lab_metrics = $psi_ok ? ( $primary['lab_metrics'] ?? array() ) : array();
+        $lab_overall = $psi_ok ? ( $primary['lab_overall'] ?? null ) : null;
+        $vitals_src  = $psi_ok ? ( $primary['vitals_source'] ?? 'none' ) : 'none';
+        $finalUrl    = $psi_ok ? ( $primary['finalUrl'] ?? $url ) : $url;
 
+        // Build overall blended score
         $parts = array();
-            // include section scores
-            $sections = isset($internal['sections']) ? $internal['sections'] : array();
-            if (is_array($sections)) {
-                foreach ($sections as $sec) {
-                    if (isset($sec['score'])) $parts[] = (int)$sec['score'];
-                }
+        $sections = isset($internal['sections']) ? $internal['sections'] : array();
+        if ( is_array($sections) ) {
+            foreach ( $sections as $sec ) {
+                if ( isset($sec['score']) ) $parts[] = (int) $sec['score'];
             }
-            // include Lighthouse categories
-            if ( isset($psi_scores['performance']) )     $parts[] = (int)$psi_scores['performance'];
-            if ( isset($psi_scores['best_practices']) )  $parts[] = (int)$psi_scores['best_practices'];
-            if ( isset($psi_scores['seo']) )             $parts[] = (int)$psi_scores['seo'];
-            // include Web Vitals when PSI provided
-            if ( !is_null($web_vitals) && ($vitals_src==='lab' || $vitals_src==='field') ) $parts[] = (int)$web_vitals;
-            $overall = $parts ? (int) round(array_sum($parts)/count($parts)) : 0;
+        }
+        foreach ( array('performance','best_practices','seo') as $k ) {
+            if ( isset($psi_scores[$k]) ) $parts[] = (int) $psi_scores[$k];
+        }
+        if ( !is_null($web_vitals) && ($vitals_src === 'lab' || $vitals_src === 'field') ) {
+            $parts[] = (int) $web_vitals;
+        }
+        $overall = $parts ? (int) round(array_sum($parts) / count($parts)) : 0;
 
+        // Persist last payload
         $payload = array(
-            'timestamp'    => current_time('Y-m-d H:i:s'),
-            'url'          => $url,
-            'finalUrl'     => $finalUrl,
-            'psi_ok'       => $psi_ok,
-            'psi_error'    => $psi_error,
-            'psi_scores'   => $psi_scores,
-            'web_vitals'   => $web_vitals,
-            'lab_metrics'  => $lab_metrics,
-            'lab_overall'  => $lab_overall,
-            'vitals_source'=> $vitals_src,
-            'internal'     => $internal,
-            'overall'      => $overall,
-            'grade'        => Nfinite_Audit_V1::grade_from_score($overall),
+            'timestamp'     => current_time('Y-m-d H:i:s'),
+            'url'           => $url,
+            'finalUrl'      => $finalUrl,
+            'psi_ok'        => $psi_ok,
+            'psi_error'     => $psi_error,
+            'psi_scores'    => $psi_scores,
+            'web_vitals'    => $web_vitals,
+            'lab_metrics'   => $lab_metrics,
+            'lab_overall'   => $lab_overall,
+            'vitals_source' => $vitals_src,
+            'internal'      => $internal,
+            'overall'       => $overall,
+            'grade'         => Nfinite_Audit_V1::grade_from_score($overall),
         );
         update_option('nfinite_audit_last', $payload, false);
 
+        // Shape minimal UI for each device panel
         $out = array();
-        if ( ! empty($mobile['ok']) ) {
+        if ( !empty($mobile['ok']) ) {
             $out['mobile'] = array(
                 'ok'       => true,
-                'overall'  => isset($mobile['lab_overall']) ? $mobile['lab_overall'] : null,
-                'metrics'  => isset($mobile['lab_metrics']) ? $mobile['lab_metrics'] : array(),
-                'warnings' => isset($mobile['warnings']) ? $mobile['warnings'] : array(),
-                'finalUrl' => isset($mobile['finalUrl']) ? $mobile['finalUrl'] : $url,
+                'overall'  => $mobile['lab_overall'] ?? null,
+                'metrics'  => $mobile['lab_metrics'] ?? array(),
+                'warnings' => $mobile['warnings']    ?? array(),
+                'finalUrl' => $mobile['finalUrl']    ?? $url,
             );
         } else {
-            $out['mobile'] = array('ok'=>false, 'error'=> isset($mobile['error']) ? $mobile['error'] : 'Unknown error');
+            $out['mobile'] = array('ok' => false, 'error' => $mobile['error'] ?? 'Unknown error');
         }
 
-        if ( ! empty($desktop['ok']) ) {
+        if ( !empty($desktop['ok']) ) {
             $out['desktop'] = array(
                 'ok'       => true,
-                'overall'  => isset($desktop['lab_overall']) ? $desktop['lab_overall'] : null,
-                'metrics'  => isset($desktop['lab_metrics']) ? $desktop['lab_metrics'] : array(),
-                'warnings' => isset($desktop['warnings']) ? $desktop['warnings'] : array(),
-                'finalUrl' => isset($desktop['finalUrl']) ? $desktop['finalUrl'] : $url,
+                'overall'  => $desktop['lab_overall'] ?? null,
+                'metrics'  => $desktop['lab_metrics'] ?? array(),
+                'warnings' => $desktop['warnings']    ?? array(),
+                'finalUrl' => $desktop['finalUrl']    ?? $url,
             );
         } else {
-            $out['desktop'] = array('ok'=>false, 'error'=> isset($desktop['error']) ? $desktop['error'] : 'Unknown error');
+            $out['desktop'] = array('ok' => false, 'error' => $desktop['error'] ?? 'Unknown error');
         }
 
         wp_send_json_success($out);
     }
 
+    /**
+     * Dashboard
+     */
     public static function render_dashboard_page() {
         if ( ! current_user_can('manage_options') ) return;
+
+        // Handle Site Health digest refresh before loading data
+        if ( isset($_POST['nfinite_health_action']) && 'refresh' === $_POST['nfinite_health_action'] ) {
+            check_admin_referer('nfinite_refresh_health');
+            delete_transient('nfinite_site_health_digest');
+        }
 
         $api      = get_option('nfinite_psi_api_key','');
         $proxy    = get_option('nfinite_proxy_url','');
         $test_url = get_option('nfinite_test_url', home_url('/'));
         $last     = get_option('nfinite_audit_last', null);
+
         ?>
         <div class="wrap nfinite-wrap">
           <h1>Nfinite Audit</h1>
 
-          <?php if ( empty($api) ) :
+          <?php
+          if ( empty($api) ) {
               $current_home = ($last && !empty($last['url'])) ? $last['url'] : $test_url;
               $psi_ui = 'https://pagespeed.web.dev/analysis?url=' . rawurlencode($current_home) . '&form_factor=mobile';
+              echo '<div class="notice notice-info"><p>No PageSpeed API key set. <a href="' . esc_url($psi_ui) . '" target="_blank" rel="noopener">Open PageSpeed report</a></p></div>';
+          }
+
+          if ( isset($_GET['nfinite_done']) ) {
+              echo '<div class="notice notice-success is-dismissible"><p>Audit completed for ' . esc_html(($last && !empty($last['url'])) ? $last['url'] : $test_url) . '.</p></div>';
+          }
+
+          if ( $last && isset($last['psi_ok']) && !$last['psi_ok'] && !empty($last['psi_error']) ) {
+              echo '<div class="notice notice-warning"><p><strong>PageSpeed Insights failed:</strong> ' . esc_html($last['psi_error']) . '. Add an API key in Settings (or configure a proxy), then re-run.</p></div>';
+          }
+
+          if ( $last && isset($last['psi_scores']['_estimated']) && $last['psi_scores']['_estimated'] ) {
+              echo '<div class="notice notice-info"><p>Lighthouse unavailable — showing <strong>estimated</strong> Performance / Best Practices / SEO based on internal checks. Add a PSI API key for official Lighthouse data.</p></div>';
+          }
           ?>
-            <div class="notice notice-info"><p>No PageSpeed API key set. <a href="<?php echo esc_url($psi_ui); ?>" target="_blank" rel="noopener">Open PageSpeed report</a></p></div>
-          <?php endif; ?>
-
-          <?php if ( isset($_GET['nfinite_done']) ) : ?>
-            <div class="notice notice-success is-dismissible"><p>Audit completed for <?php echo esc_html(($last && !empty($last['url'])) ? $last['url'] : $test_url); ?>.</p></div>
-          <?php endif; ?>
-
-          <?php if ( $last && isset($last['psi_ok']) && !$last['psi_ok'] && !empty($last['psi_error']) ) : ?>
-            <div class="notice notice-warning"><p><strong>PageSpeed Insights failed:</strong> <?php echo esc_html($last['psi_error']); ?>. Add an API key in Settings (or configure a proxy), then re-run.</p></div>
-          <?php endif; ?>
-
-          <?php if ( $last && isset($last['psi_scores']['_estimated']) && $last['psi_scores']['_estimated'] ) : ?>
-            <div class="notice notice-info"><p>Lighthouse unavailable — showing <strong>estimated</strong> Performance / Best Practices / SEO based on internal checks. Add a PSI API key for official Lighthouse data.</p></div>
-          <?php endif; ?>
 
           <p class="nfinite-help">Set your defaults in <a href="<?php echo esc_url( admin_url('admin.php?page=nfinite-audit-settings') ); ?>">Settings</a>.</p>
 
@@ -343,7 +446,7 @@ class Nfinite_Audit_Admin {
               });
               wrap.appendChild(grid);
               if (data.warnings && data.warnings.length){
-                const p = document.createElement('p'); p.className='muted'; p.textContent = 'Warnings: ' + data.warnings.join(' | '); wrap.appendChild(p);
+                const p = document.createElement('p'); p.className='nfinite-help'; p.textContent = 'Warnings: ' + data.warnings.join(' | '); wrap.appendChild(p);
               }
               return wrap;
             }
@@ -377,6 +480,61 @@ class Nfinite_Audit_Admin {
           })();
           </script>
 
+          <?php
+          // =========================
+          // SITE HEALTH DIGEST CARD
+          // =========================
+          if ( function_exists('nfinite_get_site_health_digest') ) :
+              $digest = nfinite_get_site_health_digest(false);
+              if ( isset($digest['error']) ) {
+                  echo '<div class="notice notice-error"><p>' . esc_html($digest['error']) . '</p></div>';
+              } else {
+                  ?>
+                  <section class="nfinite-section">
+                    <div class="nfinite-cards" style="grid-template-columns:1fr">
+                      <div class="nfinite-card">
+                        <div class="nfinite-card__header">
+                          <h2 class="nfinite-h" style="margin:0">Site Health Digest</h2>
+                          <form method="post" style="margin:0">
+                            <?php wp_nonce_field('nfinite_refresh_health'); ?>
+                            <input type="hidden" name="nfinite_health_action" value="refresh">
+                            <button class="button" type="submit">Refresh</button>
+                            <span class="description" style="margin-left:8px;">
+                              Last checked: <?php echo esc_html( $digest['refreshed'] ); ?>
+                            </span>
+                          </form>
+                        </div>
+                        <div class="nfinite-list">
+                          <?php foreach ( $digest['items'] as $it ) : ?>
+                            <div class="nfinite-list__item">
+                              <span class="<?php echo esc_attr( nfinite_health_status_class($it['status']) ); ?>">
+                                <?php echo esc_html( ucfirst($it['status']) ); ?>
+                              </span>
+                              <strong style="margin-left:8px;"><?php echo esc_html( $it['label'] ); ?></strong>
+                              <?php if ( ! empty($it['badge']) ) : ?>
+                                <span class="nfinite-badge nfinite-badge-muted" style="margin-left:8px;">
+                                  <?php echo esc_html( $it['badge'] ); ?>
+                                </span>
+                              <?php endif; ?>
+
+                              <?php if ( ! empty($it['description']) ) : ?>
+                                <div class="nfinite-detail"><?php echo $it['description']; ?></div>
+                              <?php endif; ?>
+
+                              <?php if ( ! empty($it['actions']) ) : ?>
+                                <div class="nfinite-detail"><?php echo $it['actions']; ?></div>
+                              <?php endif; ?>
+                            </div>
+                          <?php endforeach; ?>
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+                  <?php
+              }
+          endif;
+          ?>
+
           <h2 class="nfinite-section-title">Overall</h2>
           <section class="nfinite-section">
             <div class="nfinite-cards" style="grid-template-columns:1fr">
@@ -388,9 +546,9 @@ class Nfinite_Audit_Admin {
                     <?php echo self::grade_badge($overall); ?>
                   </div>
                   <?php
-                    $perf = isset($last['psi_scores']['performance']) ? (int)$last['psi_scores']['performance'] : 0;
+                    $perf = isset($last['psi_scores']['performance'])    ? (int)$last['psi_scores']['performance']    : 0;
                     $bp   = isset($last['psi_scores']['best_practices']) ? (int)$last['psi_scores']['best_practices'] : 0;
-                    $seo  = isset($last['psi_scores']['seo']) ? (int)$last['psi_scores']['seo'] : 0;
+                    $seo  = isset($last['psi_scores']['seo'])            ? (int)$last['psi_scores']['seo']            : 0;
                   ?>
                   <div class="nfinite-h" style="margin-top:4px">Lighthouse / Category Scores</div>
                   <?php if (!empty($last['psi_scores']['_estimated'])) echo '<p>(estimated)</p>'; ?>
@@ -408,14 +566,14 @@ class Nfinite_Audit_Admin {
             <div class="nfinite-cards" style="grid-template-columns:1fr">
               <details class="nfinite-card" open>
                 <?php
-                  $wv = array_key_exists('web_vitals', (array)$last) ? $last['web_vitals'] : null;
-                  $vsrc = isset($last['vitals_source']) ? $last['vitals_source'] : 'none';
-                  $show_metrics = in_array($vsrc, array('lab','field'), true);
-                  $wv_badge = is_null($wv) ? '' : '<span class="nfinite-badge ' . Nfinite_Audit_V1::grade_from_score((int)$wv) . '">' . Nfinite_Audit_V1::grade_from_score((int)$wv) . '</span>';
+                  $wv    = array_key_exists('web_vitals', (array)$last) ? $last['web_vitals'] : null;
+                  $vsrc  = isset($last['vitals_source']) ? $last['vitals_source'] : 'none';
+                  $show  = in_array($vsrc, array('lab','field'), true);
+                  $badge = is_null($wv) ? '' : '<span class="nfinite-badge ' . Nfinite_Audit_V1::grade_from_score((int)$wv) . '">' . Nfinite_Audit_V1::grade_from_score((int)$wv) . '</span>';
                 ?>
-                <summary><div class="nfinite-h">Web Vitals Score</div><div class="nfinite-score"><?php echo is_null($wv) ? 'N/A' : esc_html((int)$wv); ?></div><?php echo $wv_badge; ?></summary>
+                <summary><div class="nfinite-h">Web Vitals Score</div><div class="nfinite-score"><?php echo is_null($wv) ? 'N/A' : esc_html((int)$wv); ?></div><?php echo $badge; ?></summary>
                 <div class="nfinite-detail">
-                  <?php if (!$show_metrics) : ?>
+                  <?php if ( ! $show ) : ?>
                     <p>Web Vitals not available from PSI. This metric is excluded from the overall score.</p>
                   <?php else :
                       $lab = isset($last['lab_metrics']) && is_array($last['lab_metrics']) ? $last['lab_metrics'] : array();
@@ -442,7 +600,7 @@ class Nfinite_Audit_Admin {
                           <?php endforeach; ?>
                         </div>
                       <?php endif;
-                      if (!empty($last['vitals_source'])) :
+                      if ( ! empty($last['vitals_source']) ) :
                           echo '<p class="nfinite-help">Source: ' . esc_html(strtoupper($last['vitals_source'])) . '</p>';
                       endif;
                     endif; ?>
@@ -464,33 +622,33 @@ class Nfinite_Audit_Admin {
                     'core'     => 'Core Plugins',
                 );
 
-                $checks = isset($last['internal']['checks']) ? $last['internal']['checks'] : array();
-                $section_scores = isset($last['internal']['sections']) ? $last['internal']['sections'] : array();
+                $checks          = isset($last['internal']['checks'])   ? $last['internal']['checks']   : array();
+                $section_scores  = isset($last['internal']['sections']) ? $last['internal']['sections'] : array();
 
                 $label_map = array(
-                    'cache_present' => 'Page Cache Present',
-                    'compression'   => 'HTTP Compression',
-                    'client_cache'  => 'Browser Cache (Assets)',
-                    'assets_counts' => 'CSS/JS Requests',
-                    'render_blocking' => 'Render-Blocking Resources',
-                    'images_dims_and_size' => 'Image Dimensions / Next-Gen',
-                    'ttfb'          => 'TTFB',
-                    'h2_h3'         => 'HTTP/2 / HTTP/3',
-                    'autoload_size' => 'Autoloaded Options Size',
-                    'postmeta_bloat'=> 'Postmeta Bloat',
-                    'transients'    => 'Expired Transients',
-                    'updates_core'  => 'Core Updates',
-                    'updates_plugins'=> 'Plugin Updates',
-                    'updates_themes'=> 'Theme Updates',
+                    'cache_present'           => 'Page Cache Present',
+                    'compression'             => 'HTTP Compression',
+                    'client_cache'            => 'Browser Cache (Assets)',
+                    'assets_counts'           => 'CSS/JS Requests',
+                    'render_blocking'         => 'Render-Blocking Resources',
+                    'images_dims_and_size'    => 'Image Dimensions / Next-Gen',
+                    'ttfb'                    => 'TTFB',
+                    'h2_h3'                   => 'HTTP/2 / HTTP/3',
+                    'autoload_size'           => 'Autoloaded Options Size',
+                    'postmeta_bloat'          => 'Postmeta Bloat',
+                    'transients'              => 'Expired Transients',
+                    'updates_core'            => 'Core Updates',
+                    'updates_plugins'         => 'Plugin Updates',
+                    'updates_themes'          => 'Theme Updates',
                 );
 
                 $section_checks = array(
-                    'caching' => array('cache_present','compression','client_cache'),
-                    'assets'  => array('assets_counts','render_blocking'),
-                    'images'  => array('images_dims_and_size'),
-                    'server'  => array('ttfb','h2_h3'),
-                    'database'=> array('autoload_size','postmeta_bloat','transients'),
-                    'core'    => array('updates_core','updates_plugins','updates_themes'),
+                    'caching'  => array('cache_present','compression','client_cache'),
+                    'assets'   => array('assets_counts','render_blocking'),
+                    'images'   => array('images_dims_and_size'),
+                    'server'   => array('ttfb','h2_h3'),
+                    'database' => array('autoload_size','postmeta_bloat','transients'),
+                    'core'     => array('updates_core','updates_plugins','updates_themes'),
                 );
 
                 foreach ($sections as $key => $title) :
@@ -528,13 +686,14 @@ class Nfinite_Audit_Admin {
                           <div class="head">
                             <span class="label"><?php echo esc_html($label); ?></span>
                             <span class="nfinite-chip"><?php echo (int)$cscore; ?></span>
-                            <span class="nfinite-badge <?php echo $gradeG; ?>"><?php echo $gradeG; ?></span>
+                            <span class="nfinite-badge <?php echo esc_attr($gradeG); ?>"><?php echo esc_html($gradeG); ?></span>
                           </div>
                           <?php if ($hint) echo '<div class="nfinite-hint">'.$hint.'</div>'; ?>
                         </div>
                         <?php endforeach; ?>
 
                         <?php
+                        // Next-step recommendation (if registry provided)
                         if ( function_exists('nfinite_recommendations_registry') ) {
                             $recs_map = nfinite_recommendations_registry();
                             $need = array();
@@ -545,7 +704,7 @@ class Nfinite_Audit_Admin {
                                 if ($cscorex >= 100) continue;
                                 if (isset($recs_map[$slug])) {
                                     $item = $recs_map[$slug];
-                                    $item['slug'] = $slug;
+                                    $item['slug']  = $slug;
                                     $item['score'] = $cscorex;
                                     $need[] = $item;
                                 }
@@ -553,16 +712,16 @@ class Nfinite_Audit_Admin {
                             if ($need) {
                                 usort($need, function($a,$b){
                                     $pri = array('high'=>0,'medium'=>1,'low'=>2);
-                                    $sa = isset($pri[$a['severity']]) ? $pri[$a['severity']] : 3;
-                                    $sb = isset($pri[$b['severity']]) ? $pri[$b['severity']] : 3;
-                                    if ($sa == $sb) {
-                                        if ($a['score'] == $b['score']) return 0;
+                                    $sa = $pri[$a['severity']] ?? 3;
+                                    $sb = $pri[$b['severity']] ?? 3;
+                                    if ($sa === $sb) {
+                                        if ($a['score'] === $b['score']) return 0;
                                         return ($a['score'] < $b['score']) ? -1 : 1;
                                     }
                                     return ($sa < $sb) ? -1 : 1;
                                 });
                                 $top = $need[0];
-                                echo '<div class="nfinite-reco"><strong>Recommended next step:</strong> '.esc_html($top['title']).' — '.esc_html($top['message']).' <a href="'.esc_url($top['docs']).'" target="_blank" rel="noopener">Guide</a></div>';
+                                echo '<div class="nfinite-reco"><strong>Recommended next step:</strong> ' . esc_html($top['title']) . ' — ' . esc_html($top['message']) . ' <a href="' . esc_url($top['docs']) . '" target="_blank" rel="noopener">Guide</a></div>';
                             }
                         }
                         ?>
@@ -580,11 +739,12 @@ class Nfinite_Audit_Admin {
         <?php
     }
 
+    /**
+     * Settings Page
+     */
     public static function render_settings_page() {
         if ( ! current_user_can('manage_options') ) return;
 
-        $test_url = get_option('nfinite_test_url', home_url('/'));
-        $nonce    = wp_create_nonce('nfinite_test_psi');
         ?>
         <div class="wrap nfinite-wrap">
           <h1>Nfinite Audit · Settings</h1>
@@ -605,6 +765,9 @@ class Nfinite_Audit_Admin {
         <?php
     }
 
+    /**
+     * Manual run handler (fallback when not using the on-page AJAX tester)
+     */
     public static function handle_run_audit() {
         if ( ! current_user_can('manage_options') ) wp_die('Forbidden');
         check_admin_referer('nfinite_run_audit');
@@ -619,23 +782,22 @@ class Nfinite_Audit_Admin {
 
         $internal = Nfinite_Audit_V1::run_internal_audit($url);
 
-        $psi       = nfinite_fetch_psi($url, $api, $proxy);
-        $psi_ok    = isset($psi['ok']) ? $psi['ok'] : false;
-        $psi_err   = isset($psi['error']) ? $psi['error'] : '';
-        $psi_scores= isset($psi['scores']) ? $psi['scores'] : array();
-
-        $web_vitals    = isset($psi['web_vitals']) ? $psi['web_vitals'] : null;
-        $lab_metrics   = isset($psi['lab_metrics']) ? $psi['lab_metrics'] : array();
-        $lab_overall   = isset($psi['lab_overall']) ? $psi['lab_overall'] : null;
-        $vitals_source = isset($psi['vitals_source']) ? $psi['vitals_source'] : 'none';
-        $finalUrl      = isset($psi['finalUrl']) ? $psi['finalUrl'] : $url;
+        $psi         = nfinite_fetch_psi($url, $api, $proxy);
+        $psi_ok      = isset($psi['ok']) ? $psi['ok'] : false;
+        $psi_err     = isset($psi['error']) ? $psi['error'] : '';
+        $psi_scores  = isset($psi['scores']) ? $psi['scores'] : array();
+        $web_vitals  = isset($psi['web_vitals'])  ? $psi['web_vitals']  : null;
+        $lab_metrics = isset($psi['lab_metrics']) ? $psi['lab_metrics'] : array();
+        $lab_overall = isset($psi['lab_overall']) ? $psi['lab_overall'] : null;
+        $vitals_src  = isset($psi['vitals_source']) ? $psi['vitals_source'] : 'none';
+        $finalUrl    = isset($psi['finalUrl']) ? $psi['finalUrl'] : $url;
 
         if ( ! $psi_ok ) {
-            $psi_scores = nfinite_estimate_lighthouse($internal);
-            $web_vitals = null;
-            $lab_metrics = array();
-            $lab_overall = null;
-            $vitals_source = 'none';
+            $psi_scores   = nfinite_estimate_lighthouse($internal);
+            $web_vitals   = null;
+            $lab_metrics  = array();
+            $lab_overall  = null;
+            $vitals_src   = 'none';
         }
 
         $parts = array();
@@ -643,24 +805,25 @@ class Nfinite_Audit_Admin {
         if ( isset($psi_scores['performance']) )         $parts[] = (int)$psi_scores['performance'];
         if ( isset($psi_scores['best_practices']) )      $parts[] = (int)$psi_scores['best_practices'];
         if ( isset($psi_scores['seo']) )                 $parts[] = (int)$psi_scores['seo'];
-        if ( !is_null($web_vitals) && ($vitals_source==='lab' || $vitals_source==='field') ) $parts[] = (int)$web_vitals;
+        if ( !is_null($web_vitals) && ($vitals_src==='lab' || $vitals_src==='field') ) $parts[] = (int)$web_vitals;
+
         $overall = $parts ? (int) round(array_sum($parts) / count($parts)) : 0;
         $grade   = Nfinite_Audit_V1::grade_from_score($overall);
 
         $payload = array(
-            'timestamp'    => current_time('Y-m-d H:i:s'),
-            'url'          => $url,
-            'finalUrl'     => $finalUrl,
-            'psi_ok'       => $psi_ok,
-            'psi_error'    => $psi_err,
-            'psi_scores'   => $psi_scores,
-            'web_vitals'   => $web_vitals,
-            'lab_metrics'  => $lab_metrics,
-            'lab_overall'  => $lab_overall,
-            'vitals_source'=> $vitals_source,
-            'internal'     => $internal,
-            'overall'      => $overall,
-            'grade'        => $grade,
+            'timestamp'     => current_time('Y-m-d H:i:s'),
+            'url'           => $url,
+            'finalUrl'      => $finalUrl,
+            'psi_ok'        => $psi_ok,
+            'psi_error'     => $psi_err,
+            'psi_scores'    => $psi_scores,
+            'web_vitals'    => $web_vitals,
+            'lab_metrics'   => $lab_metrics,
+            'lab_overall'   => $lab_overall,
+            'vitals_source' => $vitals_src,
+            'internal'      => $internal,
+            'overall'       => $overall,
+            'grade'         => $grade,
         );
 
         update_option('nfinite_audit_last', $payload, false);

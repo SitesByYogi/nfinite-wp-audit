@@ -18,6 +18,9 @@ require_once NFINITE_AUDIT_PATH . 'includes/psi.php';
 require_once NFINITE_AUDIT_PATH . 'includes/fallback-scores.php';
 require_once NFINITE_AUDIT_PATH . 'includes/class-cache-layers-scanner.php';
 require_once NFINITE_AUDIT_PATH . 'admin/class-admin.php';
+// In nfinite-site-audit.php (main plugin bootstrap)
+require_once NFINITE_AUDIT_PATH . 'includes/site-health-digest.php';
+
 
 // Boot the admin UI
 if ( is_admin() && class_exists('Nfinite_Audit_Admin') ) {
