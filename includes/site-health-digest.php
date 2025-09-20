@@ -5,11 +5,11 @@ if ( ! defined('ABSPATH') ) exit;
  * Nfinite: Comprehensive Site Health Digest
  *
  * - Uses internal REST if Site Health routes are already registered.
- * - Falls back to calling public callables from WP_Site_Health::get_tests().
+ * - Also merges results from WP_Site_Health::get_tests() (never calls rest_api_init).
  * - As a last resort, reflectively calls public get_test_* methods.
- * - De-duplicates by slug and prefers most severe status (critical > recommended > good).
- * - Coerces values to safe strings before wp_kses_post() to avoid fatals.
- * - Cached via transient; pass $force_refresh=true to bypass.
+ * - De-duplicates by slug and prefers the most-severe status (critical > recommended > good).
+ * - Coerces mixed values to safe strings before wp_kses_post() to avoid fatals.
+ * - Cached briefly via transient; pass $force_refresh=true (and/or clear transients) to rebuild.
  *
  * @param bool $force_refresh  Bypass cache and rebuild now.
  * @param bool $include_async  Include async tests in collection.
@@ -18,7 +18,7 @@ if ( ! defined('ABSPATH') ) exit;
  *   @type array  counts     ['critical'=>int,'recommended'=>int,'good'=>int]
  *   @type string refreshed  MySQL datetime of generation.
  *   @type string site       Site name.
- *   @type string source     'rest-internal' | 'local' | 'reflect'
+ *   @type string source     'rest+local' | 'rest-internal' | 'local' | 'reflect' | 'none'
  *   @type string error      Optional error message when empty.
  * }
  */
@@ -38,7 +38,7 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
 
     // ---------------- helpers ----------------
 
-    // Map arbitrary statuses into canonical buckets.
+    // Canonicalize statuses to {critical|recommended|good}.
     $map_status = function($s){
         $s = strtolower( (string) $s );
         if ( in_array($s, array('critical','fail','error'), true) ) return 'critical';
@@ -52,7 +52,7 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
         $s = strtolower( (string) $s );
         if ( $s === 'critical' )    return 0;
         if ( $s === 'recommended' ) return 1;
-        return 2; // good/other
+        return 2; // good / anything else
     };
 
     // Safe coercion to string for arbitrary values.
@@ -61,11 +61,9 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
         if ( is_numeric($v) )  return (string) $v;
 
         if ( is_array($v) ) {
-            // Prefer common keys first.
             foreach ( array('raw','rendered','message','text','value','content') as $k ) {
                 if ( isset($v[$k]) && is_string($v[$k]) ) return $v[$k];
             }
-            // Flatten scalars from nested arrays.
             $parts = array();
             $walker = function($x) use (&$parts, &$walker) {
                 if ( is_array($x) ) {
@@ -134,17 +132,17 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
         return $base;
     };
 
-    // ---------------- collect via internal REST (when routes exist) ----------------
-    $by_slug   = array();
-    $used_rest = false;
+    $by_slug     = array();
+    $used_rest   = false;
+    $used_local  = false;
+    $used_reflect= false;
 
-    // (A) Try to detect if Site Health routes are actually registered.
+    // ---------------- collect via internal REST (when routes exist) ----------------
     $routes_have_tests = false;
     if ( function_exists('rest_get_server') ) {
         $server = rest_get_server(); // boots server if not already
         if ( $server && method_exists($server, 'get_routes') ) {
             $routes = $server->get_routes();
-            // Core route looks like '/wp-site-health/v1/tests/(?P<type>...)'
             foreach ( $routes as $route => $handlers ) {
                 if ( strpos($route, '/wp-site-health/v1/tests') === 0 ) {
                     $routes_have_tests = true;
@@ -154,7 +152,6 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
         }
     }
 
-    // (B) If available, dispatch internal REST without firing rest_api_init ourselves.
     if ( $routes_have_tests && function_exists('rest_do_request') && class_exists('WP_REST_Request') ) {
         $dispatch = function($type){
             try {
@@ -173,29 +170,60 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
             }
         };
 
+        // Collect function that supports both REST response shapes:
+        // A) flat list of tests, or B) grouped object with {critical|recommended|good} -> tests[]
         $collect = function($payload) use ($normalize) {
             $tmp = array();
             if ( ! is_array($payload) ) return $tmp;
 
-            $i = 0;
-            foreach ( $payload as $k => $result ) {
-                // Accept both keyed and numeric arrays; derive slug if needed.
-                $slug = null;
-                if ( is_string($k) && $k !== '' && ! is_numeric($k) ) {
-                    $slug = $k;
-                } elseif ( is_array($result) ) {
-                    if ( ! empty($result['test']) && is_string($result['test']) ) {
-                        $slug = $result['test'];
-                    } elseif ( ! empty($result['slug']) && is_string($result['slug']) ) {
-                        $slug = $result['slug'];
-                    }
-                }
-                if ( ! $slug ) $slug = 'test_' . $i++;
-
-                if ( is_array($result) ) {
-                    $tmp[$slug] = $normalize($slug, $result);
+            // Detect flat list quickly
+            $is_flat = false;
+            foreach ($payload as $k => $maybe) {
+                if (is_array($maybe) && (isset($maybe['status']) || isset($maybe['label']) || isset($maybe['test']) || isset($maybe['slug']))) {
+                    $is_flat = true; break;
                 }
             }
+
+            if ($is_flat) {
+                $i = 0;
+                foreach ($payload as $k => $result) {
+                    if (!is_array($result)) continue;
+                    $slug = null;
+                    if (is_string($k) && $k !== '' && !is_numeric($k)) {
+                        $slug = $k;
+                    } elseif (!empty($result['test']) && is_string($result['test'])) {
+                        $slug = $result['test'];
+                    } elseif (!empty($result['slug']) && is_string($result['slug'])) {
+                        $slug = $result['slug'];
+                    }
+                    if (!$slug) $slug = 'test_' . $i++;
+                    $tmp[$slug] = $normalize($slug, $result);
+                }
+                return $tmp;
+            }
+
+            // Grouped shape: e.g.
+            // [ 'critical' => ['tests'=>[...]], 'recommended'=>['tests'=>[...]], 'good'=>['tests'=>[...]] ]
+            foreach (array('critical','recommended','good') as $grp) {
+                if (isset($payload[$grp]['tests']) && is_array($payload[$grp]['tests'])) {
+                    $i = 0;
+                    foreach ($payload[$grp]['tests'] as $result) {
+                        if (!is_array($result)) continue;
+                        if (!isset($result['status'])) $result['status'] = $grp;
+                        $slug = '';
+                        if (!empty($result['test']) && is_string($result['test'])) {
+                            $slug = $result['test'];
+                        } elseif (!empty($result['slug']) && is_string($result['slug'])) {
+                            $slug = $result['slug'];
+                        } else {
+                            $slug = "{$grp}_{$i}";
+                        }
+                        $tmp[$slug] = $normalize($slug, $result);
+                        $i++;
+                    }
+                }
+            }
+
             return $tmp;
         };
 
@@ -214,83 +242,63 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
         }
     }
 
-    // ---------------- fallback: callables from WP_Site_Health ----------------
-    $used_local = false;
-    if ( empty($by_slug) ) {
-        if ( ! class_exists('WP_Site_Health') ) {
-            require_once ABSPATH . 'wp-admin/includes/class-wp-site-health.php';
+    // ---------------- also run local callables and merge ----------------
+    if ( ! class_exists('WP_Site_Health') ) {
+        require_once ABSPATH . 'wp-admin/includes/class-wp-site-health.php';
+    }
+    $health = new WP_Site_Health();
+    $tests  = $health->get_tests();
+
+    $run_callable = function($def) use ($health) {
+        if ( empty($def['test']) ) return null;
+        $cb = $def['test'];
+        if ( is_callable($cb) ) return call_user_func($cb);
+        if ( is_string($cb) && method_exists($health, $cb) && is_callable(array($health, $cb)) ) {
+            return call_user_func(array($health, $cb));
         }
-        $health = new WP_Site_Health();
-        $tests  = $health->get_tests();
+        return null; // never call private perform_test
+    };
 
-        $run = function($def) use ($health) {
-            if ( empty($def['test']) ) return null;
-            $cb = $def['test'];
-            if ( is_callable($cb) ) return call_user_func($cb);
-            if ( is_string($cb) && method_exists($health, $cb) && is_callable(array($health, $cb)) ) {
-                return call_user_func(array($health, $cb));
-            }
-            return null; // never call private perform_test
-        };
-
-        $tmp = array();
-        foreach ( array('direct','async') as $type ) {
-            if ( $type === 'async' && ! $include_async ) continue;
-            if ( isset($tests[$type]) && is_array($tests[$type]) ) {
-                $i = 0;
-                foreach ($tests[$type] as $k => $def) {
-                    try {
-                        $res  = $run($def);
-                    } catch (Throwable $e) {
-                        $res = null;
-                    }
-                    if ( is_array($res) ) {
-                        $slug = (is_string($k) && $k !== '' && ! is_numeric($k))
-                            ? $k
-                            : ( (!empty($def['test']) && is_string($def['test'])) ? $def['test'] : ('local_' . $i++) );
-                        $tmp[$slug] = $normalize($slug, $res);
-                    }
+    $tmp_local = array();
+    foreach ( array('direct','async') as $type ) {
+        if ( $type === 'async' && ! $include_async ) continue;
+        if ( isset($tests[$type]) && is_array($tests[$type]) ) {
+            $i = 0;
+            foreach ($tests[$type] as $k => $def) {
+                try { $res = $run_callable($def); } catch (Throwable $e) { $res = null; }
+                if ( is_array($res) ) {
+                    $slug = (is_string($k) && $k !== '' && ! is_numeric($k))
+                        ? $k
+                        : ((!empty($def['test']) && is_string($def['test'])) ? $def['test'] : ('local_' . $i++));
+                    $tmp_local[$slug] = $normalize($slug, $res);
                 }
             }
         }
-
-        if ( $tmp ) {
-            $by_slug   = $merge_results($by_slug, $tmp);
-            $used_local = true;
-        }
+    }
+    if ( $tmp_local ) {
+        $by_slug   = $merge_results($by_slug, $tmp_local);
+        $used_local = true;
     }
 
     // ---------------- last resort: reflectively call public get_test_* ----------------
-    $used_reflect = false;
     if ( empty($by_slug) ) {
-        if ( ! class_exists('WP_Site_Health') ) {
-            require_once ABSPATH . 'wp-admin/includes/class-wp-site-health.php';
-        }
-        $health  = new WP_Site_Health();
         $methods = get_class_methods($health);
-        $tmp     = array();
+        $tmp_ref = array();
         $i       = 0;
 
         foreach ( (array) $methods as $m ) {
             if ( strpos($m, 'get_test_') !== 0 ) continue;
-            // Limit to a reasonable number, just in case.
             if ( $i > 200 ) break;
-
-            try {
-                $res = call_user_func( array($health, $m) );
-            } catch (Throwable $e) {
-                $res = null;
-            }
-
+            try { $res = call_user_func( array($health, $m) ); } catch (Throwable $e) { $res = null; }
             if ( is_array($res) ) {
-                $slug       = 'reflect_' . substr($m, 9); // after "get_test_"
-                $tmp[$slug] = $normalize($slug, $res);
+                $slug         = 'reflect_' . substr($m, 9); // after "get_test_"
+                $tmp_ref[$slug] = $normalize($slug, $res);
             }
             $i++;
         }
 
-        if ( $tmp ) {
-            $by_slug     = $merge_results($by_slug, $tmp);
+        if ( $tmp_ref ) {
+            $by_slug      = $merge_results($by_slug, $tmp_ref);
             $used_reflect = true;
         }
     }
@@ -304,7 +312,7 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
             'counts'     => array('critical'=>0,'recommended'=>0,'good'=>0),
             'refreshed'  => current_time('mysql'),
             'site'       => get_bloginfo('name'),
-            'source'     => $used_rest ? 'rest-internal' : ( $used_local ? 'local' : 'reflect' ),
+            'source'     => 'none',
             'error'      => __('No Site Health results were returned. If this persists, check that Site Health routes are registered and loopback requests aren’t blocked.', 'nfinite-audit'),
         );
     }
@@ -324,12 +332,18 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
         if ( isset($counts[$it['status']]) ) $counts[$it['status']]++;
     }
 
+    // Source summary
+    $source = ($used_rest && $used_local) ? 'rest+local'
+            : ($used_rest ? 'rest-internal'
+            : ($used_local ? 'local'
+            : ($used_reflect ? 'reflect' : 'none')));
+
     $payload = array(
         'items'      => $items,
         'counts'     => $counts,
         'refreshed'  => current_time('mysql'),
         'site'       => get_bloginfo('name'),
-        'source'     => $used_rest ? 'rest-internal' : ( $used_local ? 'local' : 'reflect' ),
+        'source'     => $source,
     );
 
     // Cache for 5 minutes

@@ -702,36 +702,43 @@ if ( ! function_exists('nfinite_get_site_health_digest') ) {
     }
 
     /**
-     * NEW: Site Health page
-     */
-    public static function render_health_page() {
+ * NEW: Site Health page
+ */
+public static function render_health_page() {
     if ( ! current_user_can('manage_options') ) return;
+
+    // Load digest helper if not already present
+    if ( ! function_exists('nfinite_get_site_health_digest') ) {
+        $digest_file = dirname(__DIR__) . '/includes/site-health-digest.php';
+        if ( file_exists($digest_file) ) require_once $digest_file;
+    }
 
     if ( ! function_exists('nfinite_get_site_health_digest') ) {
     $digest_file = dirname(__DIR__) . '/includes/site-health-digest.php';
     if ( file_exists($digest_file) ) require_once $digest_file;
 }
 
+
     // Handle refresh via POST or GET
-    $did_refresh_digest = false;
+    $did_refresh_digest = false; // default
     if (
         ( isset($_POST['nfinite_health_action']) && 'refresh' === $_POST['nfinite_health_action'] && check_admin_referer('nfinite_refresh_health') )
         ||
         ( isset($_GET['nfinite_health_action'], $_GET['_wpnonce']) && 'refresh' === $_GET['nfinite_health_action'] && wp_verify_nonce($_GET['_wpnonce'], 'nfinite_refresh_health') )
     ) {
-        // clear cache key(s) used by the helper
+        // clear all possible cache keys
         delete_transient('nfinite_site_health_digest_with_async');
         delete_transient('nfinite_site_health_digest_direct_only');
         delete_transient('nfinite_site_health_digest');     // legacy
         delete_transient('nfinite_site_health_digest_v2');  // legacy
 
-        $did_refresh_digest = false;
+        $did_refresh_digest = true; // <-- IMPORTANT: force rebuild
     }
 
     // Build/refresh digest now (force on refresh; otherwise use cache)
     $digest = function_exists('nfinite_get_site_health_digest')
-    ? nfinite_get_site_health_digest( $did_refresh_digest, true ) // <-- include async
-    : array('error' => __('Site Health helper not loaded.', 'nfinite-audit'));
+        ? nfinite_get_site_health_digest( $did_refresh_digest, true )
+        : array('error' => __('Site Health helper not loaded.', 'nfinite-audit'));
 
     // Partition items by status
     $items = isset($digest['items']) && is_array($digest['items']) ? $digest['items'] : array();
@@ -814,7 +821,14 @@ if ( ! function_exists('nfinite_get_site_health_digest') ) {
                     );
                   ?>
                   <a class="button" href="<?php echo esc_url($refresh_url); ?>">Refresh (alt)</a>
-                  <span class="description">Last checked: <?php echo esc_html( $digest['refreshed'] ); ?></span>
+                  <span class="description">
+  Source: <?php echo isset($digest['source']) ? esc_html($digest['source']) : 'n/a'; ?>
+  • Last checked: <?php echo esc_html( $digest['refreshed'] ?? '' ); ?>
+  • Critical: <?php echo (int)($digest['counts']['critical'] ?? 0); ?>
+  • Recommended: <?php echo (int)($digest['counts']['recommended'] ?? 0); ?>
+  • Good: <?php echo (int)($digest['counts']['good'] ?? 0); ?>
+</span>
+
                 </div>
               </div>
               <div class="nfinite-detail">
