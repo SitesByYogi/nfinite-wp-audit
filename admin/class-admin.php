@@ -695,99 +695,134 @@ class Nfinite_Audit_Admin {
      * NEW: Site Health page
      */
     public static function render_health_page() {
-        if ( ! current_user_can('manage_options') ) return;
+    if ( ! current_user_can('manage_options') ) return;
 
-        // Handle refresh via POST or GET
-        $did_refresh_digest = false;
-        if (
-            ( isset($_POST['nfinite_health_action']) && 'refresh' === $_POST['nfinite_health_action'] && check_admin_referer('nfinite_refresh_health') )
-            ||
-            ( isset($_GET['nfinite_health_action'], $_GET['_wpnonce']) && 'refresh' === $_GET['nfinite_health_action'] && wp_verify_nonce($_GET['_wpnonce'], 'nfinite_refresh_health') )
-        ) {
-            // clear cache key(s) used by the helper
-            delete_transient('nfinite_site_health_digest');
-            delete_transient('nfinite_site_health_digest_v2'); // in case older key was used
-            $did_refresh_digest = true;
-        }
+    // Handle refresh via POST or GET
+    $did_refresh_digest = false;
+    if (
+        ( isset($_POST['nfinite_health_action']) && 'refresh' === $_POST['nfinite_health_action'] && check_admin_referer('nfinite_refresh_health') )
+        ||
+        ( isset($_GET['nfinite_health_action'], $_GET['_wpnonce']) && 'refresh' === $_GET['nfinite_health_action'] && wp_verify_nonce($_GET['_wpnonce'], 'nfinite_refresh_health') )
+    ) {
+        // clear cache key(s) used by the helper
+        delete_transient('nfinite_site_health_digest');
+        delete_transient('nfinite_site_health_digest_v2'); // in case older key was used
+        $did_refresh_digest = true;
+    }
 
-        // Build/refresh digest now (force on refresh; otherwise use cache)
-        $digest = function_exists('nfinite_get_site_health_digest')
-            ? nfinite_get_site_health_digest( $did_refresh_digest )
-            : array('error' => __('Site Health helper not loaded.', 'nfinite-audit'));
+    // Build/refresh digest now (force on refresh; otherwise use cache)
+    $digest = function_exists('nfinite_get_site_health_digest')
+        ? nfinite_get_site_health_digest( $did_refresh_digest )
+        : array('error' => __('Site Health helper not loaded.', 'nfinite-audit'));
+
+    // Partition items by status
+    $items = isset($digest['items']) && is_array($digest['items']) ? $digest['items'] : array();
+    $crit  = array_values( array_filter( $items, function($it){ return isset($it['status']) && $it['status']==='critical'; }) );
+    $reco  = array_values( array_filter( $items, function($it){ return isset($it['status']) && $it['status']==='recommended'; }) );
+    $good  = array_values( array_filter( $items, function($it){ return isset($it['status']) && $it['status']==='good'; }) );
+
+    // Small renderer for a group/card
+    $render_group = function( $title, $count, $badge_class, $rows, $empty_msg ) {
         ?>
-        <div class="wrap nfinite-wrap">
-          <h1>Site Health · Nfinite Audit</h1>
+        <div class="nfinite-card">
+          <div class="nfinite-card__header">
+            <h2 class="nfinite-h" style="margin:0"><?php echo esc_html($title); ?></h2>
+            <span class="nfinite-badge <?php echo esc_attr($badge_class); ?>"><?php echo (int) $count; ?></span>
+          </div>
+          <div class="nfinite-list">
+            <?php if (empty($rows)): ?>
+              <div class="nfinite-list__item">
+                <div class="nfinite-detail"><em><?php echo esc_html($empty_msg); ?></em></div>
+              </div>
+            <?php else: foreach ($rows as $it): ?>
+              <div class="nfinite-list__item">
+                <span class="<?php echo esc_attr( nfinite_health_status_class($it['status']) ); ?>">
+                  <?php echo esc_html( ucfirst($it['status']) ); ?>
+                </span>
+                <strong style="margin-left:8px;"><?php echo esc_html( $it['label'] ); ?></strong>
+                <?php if ( ! empty($it['badge']) ) : ?>
+                  <span class="nfinite-badge nfinite-badge-muted" style="margin-left:8px;"><?php echo esc_html( $it['badge'] ); ?></span>
+                <?php endif; ?>
 
-          <p class="nfinite-help" style="margin-top:8px">
-            <a class="button" href="<?php echo esc_url( admin_url('admin.php?page=nfinite-audit') ); ?>">← Back to Dashboard</a>
-          </p>
+                <?php if ( ! empty($it['description']) ) : ?>
+                  <div class="nfinite-detail"><?php echo $it['description']; ?></div>
+                <?php endif; ?>
 
-          <?php if ( $did_refresh_digest ) : ?>
-            <div class="notice notice-success is-dismissible"><p>Site Health rechecked just now.</p></div>
-          <?php endif; ?>
-
-          <?php
-          if ( isset($digest['error']) ) {
-              echo '<div class="notice notice-error"><p>' . esc_html($digest['error']) . '</p></div>';
-          } else {
-              ?>
-              <section class="nfinite-section">
-                <div class="nfinite-cards" style="grid-template-columns:1fr">
-                  <div class="nfinite-card">
-                    <div class="nfinite-card__header">
-                      <h2 class="nfinite-h" style="margin:0">Site Health Digest</h2>
-
-                      <div style="display:flex;align-items:center;gap:10px">
-                        <!-- POST button (primary) -->
-                        <form method="post" action="<?php echo esc_url( admin_url('admin.php?page=nfinite-audit-health') ); ?>" style="margin:0">
-                          <?php wp_nonce_field('nfinite_refresh_health'); ?>
-                          <input type="hidden" name="nfinite_health_action" value="refresh">
-                          <button class="button" type="submit" name="nfinite_health_submit" value="1">Refresh</button>
-                        </form>
-
-                        <!-- GET fallback (if POST blocked by security plugins) -->
-                        <?php
-                          $refresh_url = wp_nonce_url(
-                            add_query_arg(array('page'=>'nfinite-audit-health','nfinite_health_action'=>'refresh'), admin_url('admin.php')),
-                            'nfinite_refresh_health'
-                          );
-                        ?>
-                        <a class="button" href="<?php echo esc_url($refresh_url); ?>">Refresh (alt)</a>
-
-                        <span class="description">Last checked: <?php echo esc_html( $digest['refreshed'] ); ?></span>
-                      </div>
-                    </div>
-
-                    <div class="nfinite-list">
-                      <?php foreach ( $digest['items'] as $it ) : ?>
-                        <div class="nfinite-list__item">
-                          <span class="<?php echo esc_attr( nfinite_health_status_class($it['status']) ); ?>">
-                            <?php echo esc_html( ucfirst($it['status']) ); ?>
-                          </span>
-                          <strong style="margin-left:8px;"><?php echo esc_html( $it['label'] ); ?></strong>
-                          <?php if ( ! empty($it['badge']) ) : ?>
-                            <span class="nfinite-badge nfinite-badge-muted" style="margin-left:8px;"><?php echo esc_html( $it['badge'] ); ?></span>
-                          <?php endif; ?>
-
-                          <?php if ( ! empty($it['description']) ) : ?>
-                            <div class="nfinite-detail"><?php echo $it['description']; ?></div>
-                          <?php endif; ?>
-
-                          <?php if ( ! empty($it['actions']) ) : ?>
-                            <div class="nfinite-detail"><?php echo $it['actions']; ?></div>
-                          <?php endif; ?>
-                        </div>
-                      <?php endforeach; ?>
-                    </div>
-                  </div>
-                </div>
-              </section>
-              <?php
-          }
-          ?>
+                <?php if ( ! empty($it['actions']) ) : ?>
+                  <div class="nfinite-detail"><?php echo $it['actions']; ?></div>
+                <?php endif; ?>
+              </div>
+            <?php endforeach; endif; ?>
+          </div>
         </div>
         <?php
-    }
+    };
+    ?>
+    <div class="wrap nfinite-wrap">
+      <h1>Site Health · Nfinite Audit</h1>
+
+      <p class="nfinite-help" style="margin-top:8px">
+        <a class="button" href="<?php echo esc_url( admin_url('admin.php?page=nfinite-audit') ); ?>">← Back to Dashboard</a>
+        <a class="button" href="#critical">Jump to Critical</a>
+        <a class="button" href="#recommended">Jump to Recommended</a>
+        <a class="button" href="#passed">Jump to Passed</a>
+      </p>
+
+      <?php if ( $did_refresh_digest ) : ?>
+        <div class="notice notice-success is-dismissible"><p>Site Health rechecked just now.</p></div>
+      <?php endif; ?>
+
+      <?php if ( isset($digest['error']) ) : ?>
+        <div class="notice notice-error"><p><?php echo esc_html($digest['error']); ?></p></div>
+      <?php else : ?>
+        <section class="nfinite-section">
+          <div class="nfinite-cards" style="grid-template-columns:1fr">
+            <!-- Controls -->
+            <div class="nfinite-card">
+              <div class="nfinite-card__header">
+                <h2 class="nfinite-h" style="margin:0">Controls</h2>
+                <div style="display:flex;align-items:center;gap:10px">
+                  <!-- POST button (primary) -->
+                  <form method="post" action="<?php echo esc_url( admin_url('admin.php?page=nfinite-audit-health') ); ?>" style="margin:0">
+                    <?php wp_nonce_field('nfinite_refresh_health'); ?>
+                    <input type="hidden" name="nfinite_health_action" value="refresh">
+                    <button class="button" type="submit" name="nfinite_health_submit" value="1">Refresh</button>
+                  </form>
+                  <!-- GET fallback (if POST blocked by security plugins) -->
+                  <?php
+                    $refresh_url = wp_nonce_url(
+                      add_query_arg(array('page'=>'nfinite-audit-health','nfinite_health_action'=>'refresh'), admin_url('admin.php')),
+                      'nfinite_refresh_health'
+                    );
+                  ?>
+                  <a class="button" href="<?php echo esc_url($refresh_url); ?>">Refresh (alt)</a>
+                  <span class="description">Last checked: <?php echo esc_html( $digest['refreshed'] ); ?></span>
+                </div>
+              </div>
+              <div class="nfinite-detail">
+                <p class="nfinite-help" style="margin:8px 0 0">
+                  We group Site Health into <strong>Critical issues</strong>, <strong>Recommended improvements</strong>, and <strong>Passed checks</strong>.
+                </p>
+              </div>
+            </div>
+
+            <!-- Critical -->
+            <a id="critical"></a>
+            <?php $render_group('Critical issues', count($crit), 'nfinite-badge-danger', $crit, 'No critical issues found. 🎉'); ?>
+
+            <!-- Recommended -->
+            <a id="recommended"></a>
+            <?php $render_group('Recommended improvements', count($reco), 'nfinite-badge-warn', $reco, 'No recommended improvements at the moment.'); ?>
+
+            <!-- Passed -->
+            <a id="passed"></a>
+            <?php $render_group('Passed checks', count($good), 'nfinite-badge-good', $good, 'No checks are currently marked as passed.'); ?>
+          </div>
+        </section>
+      <?php endif; ?>
+    </div>
+    <?php
+}
 
     /**
      * Settings Page
