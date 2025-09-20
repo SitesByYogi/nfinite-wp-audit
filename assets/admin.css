@@ -1,0 +1,84 @@
+.nfinite-cards {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px
+}
+
+.nfinite-cards.full {
+    grid-template-columns: repeat(2, minmax(0, 1fr))
+}
+
+.nfinite-card {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    overflow: hidden
+}
+
+.nfinite-card summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    cursor: pointer;
+    list-style: none
+}
+
+.nfinite-card summary::-webkit-details-marker {
+    display: none
+}
+
+.nfinite-h {
+    font-weight: 700;
+    font-size: 14px;
+    color: #111827
+}
+
+.nfinite-score {
+    font-size: 28px;
+    font-weight: 800;
+    margin-bottom: 8px
+}
+
+.nfinite-detail {
+    padding: 0 16px 14px 16px;
+    border-top: 1px solid #e5e7eb
+}
+
+.nfinite-badge {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 999px;
+    font-weight: 700;
+    font-size: 12px
+}
+
+.nfinite-badge.good {
+    background: #dcfce7;
+    color: #065f46
+}
+
+.nfinite-badge.ok {
+    background: #fef9c3;
+    color: #92400e
+}
+
+.nfinite-badge.bad {
+    background: #fee2e2;
+    color: #991b1b
+}
+
+.nfinite-badge.neutral {
+    background: #e5e7eb;
+    color: #111827
+}
+
+.nfinite-psi-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px
+}
+
+.muted {
+    opacity: .75
+}
