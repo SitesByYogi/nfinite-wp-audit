@@ -712,8 +712,8 @@ class Nfinite_Audit_Admin {
 
     // Build/refresh digest now (force on refresh; otherwise use cache)
     $digest = function_exists('nfinite_get_site_health_digest')
-        ? nfinite_get_site_health_digest( $did_refresh_digest )
-        : array('error' => __('Site Health helper not loaded.', 'nfinite-audit'));
+    ? nfinite_get_site_health_digest( $did_refresh_digest, true ) // <-- include async
+    : array('error' => __('Site Health helper not loaded.', 'nfinite-audit'));
 
     // Partition items by status
     $items = isset($digest['items']) && is_array($digest['items']) ? $digest['items'] : array();

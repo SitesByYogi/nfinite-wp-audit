@@ -2,83 +2,50 @@
 if ( ! defined('ABSPATH') ) exit;
 
 /**
- * Nfinite: Site Health Digest (defensive runner)
- * - Runs a curated subset of Site Health "direct" tests.
- * - Never calls private perform_test().
- * - Coerces mixed values (arrays/objects) to strings safely before wp_kses_post().
- * - Cached briefly with a transient (cleared by your Refresh button).
+ * Nfinite: Comprehensive Site Health Digest
+ * - Pulls BOTH Direct and Async tests (prefer REST; fallback to running callables).
+ * - Includes plugin-provided tests (e.g., WP Mail SMTP).
+ * - Coerces mixed values to strings before wp_kses_post() to avoid fatals.
+ * - Groups & counts by status (critical, recommended, good).
+ * - Cached briefly; your Refresh clears the transient.
  */
-function nfinite_get_site_health_digest( $force_refresh = false ) {
+function nfinite_get_site_health_digest( $force_refresh = false, $include_async = true ) {
     // Capability fallback for older WP
     if ( ! current_user_can('view_site_health_checks') && ! current_user_can('manage_options') ) {
         return array('error' => __('You do not have permission to view Site Health checks.', 'nfinite-audit'));
     }
 
-    $cache_key = 'nfinite_site_health_digest'; // keep in sync with your refresh handler
+    $suffix    = $include_async ? '_with_async' : '_direct_only';
+    $cache_key = 'nfinite_site_health_digest' . $suffix;
+
     if ( ! $force_refresh ) {
         $cached = get_transient( $cache_key );
         if ( $cached ) return $cached;
     }
 
-    if ( ! class_exists('WP_Site_Health') ) {
-        require_once ABSPATH . 'wp-admin/includes/class-wp-site-health.php';
-    }
-
-    $health = new WP_Site_Health();
-    $tests  = $health->get_tests();
-
-    // Curated slugs (add a few aliases to handle version variance)
-    $wanted_slugs = array(
-        'https_status',
-        'ssl_support',
-        'rest_availability',
-        'loopback_requests',
-        'dotorg_communication',
-        'background_updates',
-        'php_version',
-        'sql_server',           // aka mysql_server / database_server
-        'mysql_server',
-        'database_server',
-        'plugin_version',
-        'theme_version',
-        'persistent_object_cache',
-        'is_in_debug_mode',
-        'timezone',
-        'utf8mb4_support',
-        'theme_supports_php',
-    );
-
-    // ---- helpers -----------------------------------------------------------
+    // ---------- safe string helpers ----------
     $to_text = function($v) {
-        // Return a plain string from mixed input
-        if (is_string($v)) return $v;
-        if (is_numeric($v)) return (string) $v;
+        if (is_string($v))   return $v;
+        if (is_numeric($v))  return (string)$v;
 
         if (is_array($v)) {
-            // Prefer common keys if present
             foreach (array('raw','rendered','message','text','value','content') as $k) {
                 if (isset($v[$k]) && is_string($v[$k])) return $v[$k];
             }
-            // Flatten any scalar leaves
             $parts = array();
             $walker = function($x) use (&$parts, &$walker) {
-                if (is_array($x)) {
-                    foreach ($x as $xi) $walker($xi);
-                } elseif (is_scalar($x)) {
-                    $parts[] = (string) $x;
-                }
+                if (is_array($x)) { foreach ($x as $xi) $walker($xi); }
+                elseif (is_scalar($x)) { $parts[] = (string)$x; }
             };
             $walker($v);
             return $parts ? implode(' ', $parts) : '';
         }
 
         if (is_object($v)) {
-            if (method_exists($v, '__toString')) return (string) $v;
-            // Common WP objects sometimes expose ->rendered or ->raw
+            if (method_exists($v, '__toString')) return (string)$v;
             foreach (array('rendered','raw','message','text','value','content') as $prop) {
                 if (isset($v->$prop) && is_string($v->$prop)) return $v->$prop;
             }
-            // As last resort, JSON
             $json = wp_json_encode($v);
             return is_string($json) ? $json : '';
         }
@@ -87,13 +54,12 @@ function nfinite_get_site_health_digest( $force_refresh = false ) {
     };
 
     $to_html = function($v) use ($to_text) {
-        // Always pass a *string* to KSES
         $s = $to_text($v);
         return $s === '' ? '' : wp_kses_post($s);
     };
 
-    $normalize = function( $slug, $result ) use ( $to_html, $to_text ) {
-        $label_raw = isset($result['label']) ? $result['label'] : ucfirst(str_replace('_',' ', $slug));
+    $normalize = function( $slug, $result ) use ($to_text, $to_html) {
+        $label_raw = isset($result['label']) ? $result['label'] : ucfirst(str_replace('_',' ', (string)$slug));
         $badge_val = '';
         if ( isset($result['badge']['label']) && is_string($result['badge']['label']) ) {
             $badge_val = sanitize_text_field($result['badge']['label']);
@@ -101,62 +67,107 @@ function nfinite_get_site_health_digest( $force_refresh = false ) {
             $badge_val = sanitize_text_field($result['badge']);
         }
 
+        $status = isset($result['status']) ? $result['status'] : 'recommended';
+        // Some plugins use other words (e.g., 'fail'). Map conservatively.
+        if ($status === 'fail') $status = 'critical';
+        if ($status === 'good' || $status === 'recommended' || $status === 'critical') {
+            // ok
+        } else {
+            // Unknown => bucket as recommended
+            $status = 'recommended';
+        }
+
         return array(
             'slug'        => sanitize_key( is_string($slug) ? $slug : $to_text($slug) ),
-            'status'      => isset($result['status']) ? $result['status'] : 'recommended', // good|recommended|critical
+            'status'      => $status, // good|recommended|critical
             'label'       => wp_strip_all_tags( is_string($label_raw) ? $label_raw : $to_text($label_raw) ),
-            'description' => $to_html( isset($result['description']) ? $result['description'] : '' ),
+            'description' => $to_html( $result['description'] ?? '' ),
             'badge'       => $badge_val,
-            'actions'     => $to_html( isset($result['actions']) ? $result['actions'] : '' ),
+            'actions'     => $to_html( $result['actions'] ?? '' ),
         );
     };
 
-    $run_test = function( $test_def ) use ( $health ) {
-        if ( empty($test_def['test']) ) return null;
-        $cb = $test_def['test'];
+    // ---------- attempt REST first ----------
+    $items = array();
+    $rest_ok = false;
 
-        if ( is_callable( $cb ) ) {
-            return call_user_func( $cb );
+    if ( function_exists('rest_url') && function_exists('wp_remote_get') ) {
+        $headers = array('X-WP-Nonce' => wp_create_nonce('wp_rest'));
+        $fetch   = function( $type ) use ($headers) {
+            $url = rest_url('wp-site-health/v1/tests/' . $type);
+            $res = wp_remote_get($url, array('headers'=>$headers, 'timeout'=>15));
+            if (is_wp_error($res)) return null;
+            $code = wp_remote_retrieve_response_code($res);
+            if ((int)$code !== 200) return null;
+            $body = json_decode( wp_remote_retrieve_body($res), true );
+            return is_array($body) ? $body : null;
+        };
+
+        $direct_body = $fetch('direct');
+        if ( is_array($direct_body) ) {
+            foreach ($direct_body as $slug => $result) {
+                if (is_array($result)) $items[] = $normalize($slug, $result);
+            }
+            $rest_ok = true;
         }
-        if ( is_string( $cb ) && method_exists( $health, $cb ) && is_callable( array($health, $cb) ) ) {
-            return call_user_func( array($health, $cb) );
-        }
-        return null; // unsupported shape (avoids private perform_test)
-    };
-    // ------------------------------------------------------------------------
 
-    $items  = array();
-    $direct = ( is_array($tests) && isset($tests['direct']) && is_array($tests['direct']) ) ? $tests['direct'] : array();
-
-    // 1) Run curated slugs first
-    foreach ( $direct as $slug => $def ) {
-        if ( ! in_array( $slug, $wanted_slugs, true ) ) continue;
-        $result = $run_test( $def );
-        if ( is_array( $result ) ) $items[] = $normalize( $slug, $result );
-    }
-
-    // 2) Fallback: if nothing matched (version mismatch), sample the first dozen direct tests
-    if ( empty($items) && $direct ) {
-        $count = 0;
-        foreach ( $direct as $slug => $def ) {
-            $result = $run_test( $def );
-            if ( is_array( $result ) ) {
-                $items[] = $normalize( $slug, $result );
-                if ( ++$count >= 12 ) break;
+        if ( $include_async ) {
+            $async_body = $fetch('async');
+            if ( is_array($async_body) ) {
+                // Merge async. If duplicate slug exists, prefer DIRECT.
+                $seen = array();
+                foreach ($items as $it) { $seen[$it['slug']] = true; }
+                foreach ($async_body as $slug => $result) {
+                    if (isset($seen[$slug])) continue;
+                    if (is_array($result)) $items[] = $normalize($slug, $result);
+                }
+                $rest_ok = $rest_ok || !empty($async_body);
             }
         }
     }
 
+    // ---------- fallback: run callables from WP_Site_Health ----------
+    if ( ! $rest_ok ) {
+        if ( ! class_exists('WP_Site_Health') ) {
+            require_once ABSPATH . 'wp-admin/includes/class-wp-site-health.php';
+        }
+        $health = new WP_Site_Health();
+        $tests  = $health->get_tests();
+
+        $run = function( $def ) use ($health) {
+            if ( empty($def['test']) ) return null;
+            $cb = $def['test'];
+            if ( is_callable($cb) ) return call_user_func($cb);
+            if ( is_string($cb) && method_exists($health, $cb) && is_callable(array($health, $cb)) ) {
+                return call_user_func(array($health, $cb));
+            }
+            return null; // never call private perform_test
+        };
+
+        $buckets = array();
+        foreach (array('direct','async') as $type) {
+            if ($type === 'async' && ! $include_async) continue;
+            if ( isset($tests[$type]) && is_array($tests[$type]) ) {
+                foreach ($tests[$type] as $slug => $def) {
+                    $res = $run($def);
+                    if ( is_array($res) ) $buckets[] = $normalize($slug, $res);
+                }
+            }
+        }
+        $items = $buckets;
+    }
+
     if ( empty($items) ) {
         return array(
-            'error' => __(
-                'No Site Health results were returned. This can happen if a security plugin blocks loopback/REST requests, or if tests are unavailable in this WordPress version. Open Tools → Site Health in another tab to confirm tests run.',
-                'nfinite-audit'
-            ),
+            'items'      => array(),
+            'refreshed'  => current_time('mysql'),
+            'site'       => get_bloginfo('name'),
+            'counts'     => array('critical'=>0,'recommended'=>0,'good'=>0),
+            'error'      => __('No Site Health results were returned. If this persists, check that REST API and loopback requests are allowed for logged-in admins.', 'nfinite-audit'),
         );
     }
 
-    // Sort: critical → recommended → good → label
+    // Sort and count
     usort($items, function($a,$b){
         $order = array('critical'=>0,'recommended'=>1,'good'=>2);
         $ac = $order[$a['status']] ?? 9;
@@ -165,13 +176,20 @@ function nfinite_get_site_health_digest( $force_refresh = false ) {
         return $ac <=> $bc;
     });
 
+    $counts = array('critical'=>0,'recommended'=>0,'good'=>0);
+    foreach ($items as $it) {
+        if (isset($counts[$it['status']])) $counts[$it['status']]++;
+    }
+
     $payload = array(
-        'items'     => $items,
-        'refreshed' => current_time('mysql'),
-        'site'      => get_bloginfo('name'),
+        'items'      => $items,
+        'counts'     => $counts,
+        'refreshed'  => current_time('mysql'),
+        'site'       => get_bloginfo('name'),
+        'source'     => $rest_ok ? 'rest' : 'local',
     );
 
-    // Cache for 5 minutes. Your Refresh button deletes this transient.
+    // Cache 5 minutes; your Refresh clears this
     set_transient( $cache_key, $payload, 5 * MINUTE_IN_SECONDS );
 
     return $payload;
