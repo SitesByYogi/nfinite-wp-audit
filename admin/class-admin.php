@@ -32,7 +32,6 @@ class Nfinite_Audit_Admin {
             59
         );
 
-        // Keep a Dashboard submenu (mirrors top-level)
         add_submenu_page(
             'nfinite-audit',
             'Dashboard · Nfinite Audit',
@@ -42,7 +41,6 @@ class Nfinite_Audit_Admin {
             array(__CLASS__, 'render_dashboard_page')
         );
 
-        // Settings
         add_submenu_page(
             'nfinite-audit',
             'Settings · Nfinite Audit',
@@ -145,7 +143,7 @@ class Nfinite_Audit_Admin {
         . '.nfinite-detail{padding:0 16px 14px 16px;border-top:1px solid #e5e7eb}'
         . '.nfinite-badge{display:inline-block;padding:4px 8px;border-radius:999px;font-weight:700;font-size:12px}'
 
-        // Grade badges (A–F) used across cards
+        // Grade badges (A–F)
         . '.A{background:#ecfdf5;color:#065f46}.B{background:#eff6ff;color:#1e40af}.C{background:#fef3c7;color:#92400e}.D{background:#fee2e2;color:#991b1b}.F{background:#fef2f2;color:#991b1b}'
 
         // Section disclosure chevron
@@ -177,7 +175,7 @@ class Nfinite_Audit_Admin {
         . '@media (max-width:782px){.nfinite-cards,.nfinite-cards.full{grid-template-columns:1fr}}';
         wp_add_inline_style('nfinite-admin', $css);
 
-        // Localize a couple of values for assets/admin.js if needed
+        // Localize for assets/admin.js if needed
         wp_localize_script('nfinite-admin', 'NFINITE_AUDIT_VARS', array(
             'ajax_url' => admin_url('admin-ajax.php'),
             'nonce'    => wp_create_nonce('nfinite_test_psi'),
@@ -351,10 +349,15 @@ class Nfinite_Audit_Admin {
     public static function render_dashboard_page() {
         if ( ! current_user_can('manage_options') ) return;
 
-        // Handle Site Health digest refresh before loading data
-        if ( isset($_POST['nfinite_health_action']) && 'refresh' === $_POST['nfinite_health_action'] ) {
-            check_admin_referer('nfinite_refresh_health');
+        // ---- Site Health digest refresh (handles POST or GET) ----
+        $did_refresh_digest = false;
+        if (
+            ( isset($_POST['nfinite_health_action']) && 'refresh' === $_POST['nfinite_health_action'] && check_admin_referer('nfinite_refresh_health') )
+            ||
+            ( isset($_GET['nfinite_health_action'], $_GET['_wpnonce']) && 'refresh' === $_GET['nfinite_health_action'] && wp_verify_nonce($_GET['_wpnonce'], 'nfinite_refresh_health') )
+        ) {
             delete_transient('nfinite_site_health_digest');
+            $did_refresh_digest = true;
         }
 
         $api      = get_option('nfinite_psi_api_key','');
@@ -365,6 +368,10 @@ class Nfinite_Audit_Admin {
         ?>
         <div class="wrap nfinite-wrap">
           <h1>Nfinite Audit</h1>
+
+          <?php if ( $did_refresh_digest ) : ?>
+            <div class="notice notice-success is-dismissible"><p>Site Health rechecked just now.</p></div>
+          <?php endif; ?>
 
           <?php
           if ( empty($api) ) {
@@ -484,8 +491,11 @@ class Nfinite_Audit_Admin {
           // =========================
           // SITE HEALTH DIGEST CARD
           // =========================
+          $digest = function_exists('nfinite_get_site_health_digest')
+              ? nfinite_get_site_health_digest( $did_refresh_digest ) // force rerun on refresh
+              : array('error' => __('Site Health helper not loaded.', 'nfinite-audit'));
+
           if ( function_exists('nfinite_get_site_health_digest') ) :
-              $digest = nfinite_get_site_health_digest(false);
               if ( isset($digest['error']) ) {
                   echo '<div class="notice notice-error"><p>' . esc_html($digest['error']) . '</p></div>';
               } else {
@@ -495,14 +505,23 @@ class Nfinite_Audit_Admin {
                       <div class="nfinite-card">
                         <div class="nfinite-card__header">
                           <h2 class="nfinite-h" style="margin:0">Site Health Digest</h2>
-                          <form method="post" style="margin:0">
-                            <?php wp_nonce_field('nfinite_refresh_health'); ?>
-                            <input type="hidden" name="nfinite_health_action" value="refresh">
-                            <button class="button" type="submit">Refresh</button>
-                            <span class="description" style="margin-left:8px;">
-                              Last checked: <?php echo esc_html( $digest['refreshed'] ); ?>
-                            </span>
-                          </form>
+                          <div style="display:flex;align-items:center;gap:10px">
+                            <!-- POST button (primary) -->
+                            <form method="post" action="<?php echo esc_url( admin_url('admin.php?page=nfinite-audit') ); ?>" style="margin:0">
+                              <?php wp_nonce_field('nfinite_refresh_health'); ?>
+                              <input type="hidden" name="nfinite_health_action" value="refresh">
+                              <button class="button" type="submit" name="nfinite_health_submit" value="1">Refresh</button>
+                            </form>
+                            <!-- GET fallback link -->
+                            <?php
+                              $refresh_url = wp_nonce_url(
+                                add_query_arg(array('page'=>'nfinite-audit','nfinite_health_action'=>'refresh'), admin_url('admin.php')),
+                                'nfinite_refresh_health'
+                              );
+                            ?>
+                            <a class="button" href="<?php echo esc_url($refresh_url); ?>">Refresh (alt)</a>
+                            <span class="description">Last checked: <?php echo esc_html( $digest['refreshed'] ); ?></span>
+                          </div>
                         </div>
                         <div class="nfinite-list">
                           <?php foreach ( $digest['items'] as $it ) : ?>
@@ -590,7 +609,7 @@ class Nfinite_Audit_Admin {
                               $value_fmt = esc_html(isset($m['value_fmt']) ? $m['value_fmt'] : '—'); ?>
                               <div class="nfinite-card">
                                 <details open>
-                                  <summary><span class="nfinite-h"><?php echo $label; ?></span><span class="nfinite-badge <?php echo $badge_class; ?>"><?php echo $grade; ?></span></summary>
+                                  <summary><span class="nfinite-h"><?php echo $label; ?></span><span class="nfinite-badge <?php echo esc_attr($badge_class); ?>"><?php echo esc_html($grade); ?></span></summary>
                                   <div class="nfinite-detail">
                                     <p><strong>Value:</strong> <?php echo $value_fmt; ?></p>
                                     <p><strong>Score:</strong> <?php echo is_null($score) ? '—' : (int)$score; ?></p>
