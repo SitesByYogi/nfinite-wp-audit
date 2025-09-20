@@ -698,7 +698,7 @@ class Nfinite_Audit_Admin {
     if ( ! current_user_can('manage_options') ) return;
 
     // Handle refresh via POST or GET
-    $did_refresh_digest = false;
+    $did_refresh_digest = true;
     if (
         ( isset($_POST['nfinite_health_action']) && 'refresh' === $_POST['nfinite_health_action'] && check_admin_referer('nfinite_refresh_health') )
         ||

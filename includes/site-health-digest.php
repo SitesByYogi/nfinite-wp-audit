@@ -2,15 +2,15 @@
 if ( ! defined('ABSPATH') ) exit;
 
 /**
- * Nfinite: Comprehensive Site Health Digest
- * - Pulls BOTH Direct and Async tests (prefer REST; fallback to running callables).
- * - Includes plugin-provided tests (e.g., WP Mail SMTP).
- * - Coerces mixed values to strings before wp_kses_post() to avoid fatals.
- * - Groups & counts by status (critical, recommended, good).
- * - Cached briefly; your Refresh clears the transient.
+ * Nfinite: Comprehensive Site Health Digest (internal REST)
+ * - Runs BOTH Direct and Async tests by dispatching WP's REST routes internally (rest_do_request),
+ *   so we get the same results as Tools → Site Health (including plugin tests) without HTTP/nonces.
+ * - Falls back to calling public callables if REST is unavailable.
+ * - Dedupes by slug, keeping the most severe status (critical > recommended > good).
+ * - Coerces mixed values (arrays/objects) to safe HTML strings before wp_kses_post().
+ * - Caches briefly; your "Refresh" button clears the cache.
  */
 function nfinite_get_site_health_digest( $force_refresh = false, $include_async = true ) {
-    // Capability fallback for older WP
     if ( ! current_user_can('view_site_health_checks') && ! current_user_can('manage_options') ) {
         return array('error' => __('You do not have permission to view Site Health checks.', 'nfinite-audit'));
     }
@@ -23,11 +23,24 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
         if ( $cached ) return $cached;
     }
 
-    // ---------- safe string helpers ----------
+    // ---------- helpers ----------
+    $status_rank = function($s){
+        $s = strtolower((string)$s);
+        if (in_array($s, array('critical','fail','error'), true)) return 0;
+        if (in_array($s, array('recommended','warning','info'), true)) return 1;
+        return 2; // good / pass / anything else
+    };
+    $map_status = function($s){
+        $s = strtolower((string)$s);
+        if (in_array($s, array('critical','fail','error'), true)) return 'critical';
+        if (in_array($s, array('recommended','warning','info'), true)) return 'recommended';
+        if (in_array($s, array('good','pass'), true)) return 'good';
+        return 'recommended';
+    };
+
     $to_text = function($v) {
         if (is_string($v))   return $v;
         if (is_numeric($v))  return (string)$v;
-
         if (is_array($v)) {
             foreach (array('raw','rendered','message','text','value','content') as $k) {
                 if (isset($v[$k]) && is_string($v[$k])) return $v[$k];
@@ -40,25 +53,22 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
             $walker($v);
             return $parts ? implode(' ', $parts) : '';
         }
-
         if (is_object($v)) {
             if (method_exists($v, '__toString')) return (string)$v;
             foreach (array('rendered','raw','message','text','value','content') as $prop) {
                 if (isset($v->$prop) && is_string($v->$prop)) return $v->$prop;
             }
-            $json = wp_json_encode($v);
+            $json = function_exists('wp_json_encode') ? wp_json_encode($v) : json_encode($v);
             return is_string($json) ? $json : '';
         }
-
         return '';
     };
-
     $to_html = function($v) use ($to_text) {
         $s = $to_text($v);
         return $s === '' ? '' : wp_kses_post($s);
     };
 
-    $normalize = function( $slug, $result ) use ($to_text, $to_html) {
+    $normalize = function($slug, $result) use ($to_text, $to_html, $map_status) {
         $label_raw = isset($result['label']) ? $result['label'] : ucfirst(str_replace('_',' ', (string)$slug));
         $badge_val = '';
         if ( isset($result['badge']['label']) && is_string($result['badge']['label']) ) {
@@ -66,20 +76,9 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
         } elseif ( isset($result['badge']) && is_string($result['badge']) ) {
             $badge_val = sanitize_text_field($result['badge']);
         }
-
-        $status = isset($result['status']) ? $result['status'] : 'recommended';
-        // Some plugins use other words (e.g., 'fail'). Map conservatively.
-        if ($status === 'fail') $status = 'critical';
-        if ($status === 'good' || $status === 'recommended' || $status === 'critical') {
-            // ok
-        } else {
-            // Unknown => bucket as recommended
-            $status = 'recommended';
-        }
-
         return array(
             'slug'        => sanitize_key( is_string($slug) ? $slug : $to_text($slug) ),
-            'status'      => $status, // good|recommended|critical
+            'status'      => $map_status( $result['status'] ?? 'recommended' ), // critical|recommended|good
             'label'       => wp_strip_all_tags( is_string($label_raw) ? $label_raw : $to_text($label_raw) ),
             'description' => $to_html( $result['description'] ?? '' ),
             'badge'       => $badge_val,
@@ -87,54 +86,75 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
         );
     };
 
-    // ---------- attempt REST first ----------
-    $items = array();
-    $rest_ok = false;
+    $merge_results = function(array $base, array $incoming) use ($status_rank) {
+        // Keep the most severe per slug; prefer items with any description/actions when ranks tie.
+        foreach ($incoming as $slug => $item) {
+            if (!isset($base[$slug])) { $base[$slug] = $item; continue; }
+            $a = $base[$slug]; $b = $item;
+            $ra = $status_rank($a['status']); $rb = $status_rank($b['status']);
+            if ( $rb < $ra ) { $base[$slug] = $b; continue; }
+            if ( $rb === $ra ) {
+                $a_has = (!empty($a['description']) || !empty($a['actions']));
+                $b_has = (!empty($b['description']) || !empty($b['actions']));
+                if ( $b_has && ! $a_has ) $base[$slug] = $b;
+            }
+        }
+        return $base;
+    };
 
-    if ( function_exists('rest_url') && function_exists('wp_remote_get') ) {
-        $headers = array('X-WP-Nonce' => wp_create_nonce('wp_rest'));
-        $fetch   = function( $type ) use ($headers) {
-            $url = rest_url('wp-site-health/v1/tests/' . $type);
-            $res = wp_remote_get($url, array('headers'=>$headers, 'timeout'=>15));
-            if (is_wp_error($res)) return null;
-            $code = wp_remote_retrieve_response_code($res);
-            if ((int)$code !== 200) return null;
-            $body = json_decode( wp_remote_retrieve_body($res), true );
-            return is_array($body) ? $body : null;
+    // ---------- preferred: dispatch REST internally ----------
+    $items = array();
+    $by_slug = array();
+    $used_rest = false;
+
+    if ( function_exists('rest_do_request') && class_exists('WP_REST_Request') ) {
+        $dispatch = function($type){
+            $req = new WP_REST_Request('GET', '/wp-site-health/v1/tests/' . $type);
+            $res = rest_do_request($req);
+            if ( is_wp_error($res) ) return null;
+            if ( $res instanceof WP_REST_Response ) {
+                $data = $res->get_data();
+            } else {
+                $server = rest_get_server();
+                $data = $server ? $server->response_to_data($res, false) : null;
+            }
+            return is_array($data) ? $data : null;
         };
 
-        $direct_body = $fetch('direct');
-        if ( is_array($direct_body) ) {
-            foreach ($direct_body as $slug => $result) {
-                if (is_array($result)) $items[] = $normalize($slug, $result);
+        // DIRECT tests
+        $direct = $dispatch('direct');
+        if ( is_array($direct) ) {
+            $tmp = array();
+            foreach ($direct as $slug => $result) {
+                if (is_array($result)) $tmp[$slug] = $normalize($slug, $result);
             }
-            $rest_ok = true;
+            $by_slug = $merge_results($by_slug, $tmp);
+            $used_rest = true;
         }
 
+        // ASYNC tests
         if ( $include_async ) {
-            $async_body = $fetch('async');
-            if ( is_array($async_body) ) {
-                // Merge async. If duplicate slug exists, prefer DIRECT.
-                $seen = array();
-                foreach ($items as $it) { $seen[$it['slug']] = true; }
-                foreach ($async_body as $slug => $result) {
-                    if (isset($seen[$slug])) continue;
-                    if (is_array($result)) $items[] = $normalize($slug, $result);
+            $async = $dispatch('async');
+            if ( is_array($async) ) {
+                $tmp = array();
+                foreach ($async as $slug => $result) {
+                    if (is_array($result)) $tmp[$slug] = $normalize($slug, $result);
                 }
-                $rest_ok = $rest_ok || !empty($async_body);
+                $by_slug = $merge_results($by_slug, $tmp);
+                $used_rest = true;
             }
         }
     }
 
-    // ---------- fallback: run callables from WP_Site_Health ----------
-    if ( ! $rest_ok ) {
+    // ---------- fallback: call public callables ----------
+    if ( ! $used_rest ) {
         if ( ! class_exists('WP_Site_Health') ) {
             require_once ABSPATH . 'wp-admin/includes/class-wp-site-health.php';
         }
         $health = new WP_Site_Health();
         $tests  = $health->get_tests();
 
-        $run = function( $def ) use ($health) {
+        $run = function($def) use ($health) {
             if ( empty($def['test']) ) return null;
             $cb = $def['test'];
             if ( is_callable($cb) ) return call_user_func($cb);
@@ -144,30 +164,32 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
             return null; // never call private perform_test
         };
 
-        $buckets = array();
-        foreach (array('direct','async') as $type) {
+        foreach ( array('direct','async') as $type ) {
             if ($type === 'async' && ! $include_async) continue;
             if ( isset($tests[$type]) && is_array($tests[$type]) ) {
+                $tmp = array();
                 foreach ($tests[$type] as $slug => $def) {
                     $res = $run($def);
-                    if ( is_array($res) ) $buckets[] = $normalize($slug, $res);
+                    if ( is_array($res) ) $tmp[$slug] = $normalize($slug, $res);
                 }
+                $by_slug = $merge_results($by_slug, $tmp);
             }
         }
-        $items = $buckets;
     }
 
+    // ---------- finish ----------
+    $items = array_values($by_slug);
     if ( empty($items) ) {
         return array(
             'items'      => array(),
+            'counts'     => array('critical'=>0,'recommended'=>0,'good'=>0),
             'refreshed'  => current_time('mysql'),
             'site'       => get_bloginfo('name'),
-            'counts'     => array('critical'=>0,'recommended'=>0,'good'=>0),
-            'error'      => __('No Site Health results were returned. If this persists, check that REST API and loopback requests are allowed for logged-in admins.', 'nfinite-audit'),
+            'source'     => $used_rest ? 'rest-internal' : 'local',
+            'error'      => __('No Site Health results were returned. If this persists, check that Site Health routes are registered and loopback requests aren’t blocked.', 'nfinite-audit'),
         );
     }
 
-    // Sort and count
     usort($items, function($a,$b){
         $order = array('critical'=>0,'recommended'=>1,'good'=>2);
         $ac = $order[$a['status']] ?? 9;
@@ -186,12 +208,10 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
         'counts'     => $counts,
         'refreshed'  => current_time('mysql'),
         'site'       => get_bloginfo('name'),
-        'source'     => $rest_ok ? 'rest' : 'local',
+        'source'     => $used_rest ? 'rest-internal' : 'local',
     );
 
-    // Cache 5 minutes; your Refresh clears this
     set_transient( $cache_key, $payload, 5 * MINUTE_IN_SECONDS );
-
     return $payload;
 }
 
