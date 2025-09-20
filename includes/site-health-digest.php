@@ -102,10 +102,32 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
         return $base;
     };
 
-    // ---------- preferred: dispatch REST internally ----------
+        // ---------- preferred: dispatch REST internally ----------
     $items = array();
     $by_slug = array();
     $used_rest = false;
+
+    // Make sure Site Health routes are registered
+    if ( ! class_exists('WP_Site_Health') ) {
+        require_once ABSPATH . 'wp-admin/includes/class-wp-site-health.php';
+    }
+    // Instantiating ensures hooks fire that register the REST endpoints in some WP versions.
+    try {
+        if ( method_exists('WP_Site_Health','get_instance') ) {
+            WP_Site_Health::get_instance();
+        } else {
+            new WP_Site_Health();
+        }
+    } catch (Throwable $e) {
+        // continue; we'll still attempt REST, then fallback to local callables
+    }
+
+    // ensure REST server is booted and routes are registered
+if ( function_exists('rest_get_server') ) {
+    rest_get_server();
+    // be explicit: some stacks need this to fire to attach routes
+    do_action('rest_api_init');
+}
 
     if ( function_exists('rest_do_request') && class_exists('WP_REST_Request') ) {
         $dispatch = function($type){
@@ -121,14 +143,35 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
             return is_array($data) ? $data : null;
         };
 
+        $collect = function($payload) use ($normalize) {
+            $tmp = array();
+            if ( ! is_array($payload) ) return $tmp;
+
+            $i = 0;
+            foreach ($payload as $k => $result) {
+                // Handle both keyed arrays and numeric arrays; prefer an explicit slug/test field
+                $slug = null;
+                if ( is_string($k) && $k !== '' && ! is_numeric($k) ) {
+                    $slug = $k;
+                } elseif ( is_array($result) ) {
+                    if ( ! empty($result['test']) && is_string($result['test']) ) {
+                        $slug = $result['test'];
+                    } elseif ( ! empty($result['slug']) && is_string($result['slug']) ) {
+                        $slug = $result['slug'];
+                    }
+                }
+                if ( ! $slug ) $slug = 'test_' . $i++;
+
+                $tmp[$slug] = is_array($result) ? $normalize($slug, $result) : null;
+                if ( is_null($tmp[$slug]) ) unset($tmp[$slug]);
+            }
+            return $tmp;
+        };
+
         // DIRECT tests
         $direct = $dispatch('direct');
         if ( is_array($direct) ) {
-            $tmp = array();
-            foreach ($direct as $slug => $result) {
-                if (is_array($result)) $tmp[$slug] = $normalize($slug, $result);
-            }
-            $by_slug = $merge_results($by_slug, $tmp);
+            $by_slug = $merge_results($by_slug, $collect($direct));
             $used_rest = true;
         }
 
@@ -136,11 +179,7 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
         if ( $include_async ) {
             $async = $dispatch('async');
             if ( is_array($async) ) {
-                $tmp = array();
-                foreach ($async as $slug => $result) {
-                    if (is_array($result)) $tmp[$slug] = $normalize($slug, $result);
-                }
-                $by_slug = $merge_results($by_slug, $tmp);
+                $by_slug = $merge_results($by_slug, $collect($async));
                 $used_rest = true;
             }
         }
@@ -168,8 +207,12 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
             if ($type === 'async' && ! $include_async) continue;
             if ( isset($tests[$type]) && is_array($tests[$type]) ) {
                 $tmp = array();
-                foreach ($tests[$type] as $slug => $def) {
-                    $res = $run($def);
+                $i = 0;
+                foreach ($tests[$type] as $k => $def) {
+                    $res  = $run($def);
+                    $slug = (is_string($k) && $k !== '' && ! is_numeric($k))
+                        ? $k
+                        : ( (!empty($def['test']) && is_string($def['test'])) ? $def['test'] : 'local_' . $i++ );
                     if ( is_array($res) ) $tmp[$slug] = $normalize($slug, $res);
                 }
                 $by_slug = $merge_results($by_slug, $tmp);
@@ -178,7 +221,35 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
     }
 
     // ---------- finish ----------
+
+    // If we still have no items, try reflective fallback: call all public get_test_* methods.
+    if ( empty($by_slug) ) {
+        if ( ! class_exists('WP_Site_Health') ) {
+            require_once ABSPATH . 'wp-admin/includes/class-wp-site-health.php';
+        }
+        $health = new WP_Site_Health();
+        $methods = get_class_methods($health);
+        $tmp = array();
+        $i = 0;
+        foreach ( (array) $methods as $m ) {
+            if ( strpos($m, 'get_test_') !== 0 ) continue;
+            // Some tests are expensive; keep it quick
+            try {
+                $res = call_user_func(array($health, $m));
+                if ( is_array($res) ) {
+                    $slug = 'reflect_' . substr($m, 9); // after "get_test_"
+                    $tmp[$slug] = $normalize($slug, $res);
+                }
+            } catch (Throwable $e) { /* ignore */ }
+            if (++$i > 200) break; // hard stop
+        }
+        if ( $tmp ) {
+            $by_slug = $merge_results($by_slug, $tmp);
+        }
+    }
+
     $items = array_values($by_slug);
+
     if ( empty($items) ) {
         return array(
             'items'      => array(),
@@ -213,6 +284,7 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
 
     set_transient( $cache_key, $payload, 5 * MINUTE_IN_SECONDS );
     return $payload;
+
 }
 
 /** Status → CSS class for your UI */

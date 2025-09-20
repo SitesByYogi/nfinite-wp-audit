@@ -16,7 +16,17 @@ class Nfinite_Audit_Admin {
 
         // AJAX
         add_action('wp_ajax_nfinite_test_psi', array(__CLASS__, 'ajax_test_psi'));
+
+        // Make sure our digest helper is available
+if ( ! function_exists('nfinite_get_site_health_digest') ) {
+    $digest_file = dirname(__DIR__) . '/includes/site-health-digest.php';
+    if ( file_exists($digest_file) ) {
+        require_once $digest_file;
     }
+}
+
+    }
+
 
     /**
      * Admin Menu
@@ -697,16 +707,24 @@ class Nfinite_Audit_Admin {
     public static function render_health_page() {
     if ( ! current_user_can('manage_options') ) return;
 
+    if ( ! function_exists('nfinite_get_site_health_digest') ) {
+    $digest_file = dirname(__DIR__) . '/includes/site-health-digest.php';
+    if ( file_exists($digest_file) ) require_once $digest_file;
+}
+
     // Handle refresh via POST or GET
-    $did_refresh_digest = true;
+    $did_refresh_digest = false;
     if (
         ( isset($_POST['nfinite_health_action']) && 'refresh' === $_POST['nfinite_health_action'] && check_admin_referer('nfinite_refresh_health') )
         ||
         ( isset($_GET['nfinite_health_action'], $_GET['_wpnonce']) && 'refresh' === $_GET['nfinite_health_action'] && wp_verify_nonce($_GET['_wpnonce'], 'nfinite_refresh_health') )
     ) {
         // clear cache key(s) used by the helper
-        delete_transient('nfinite_site_health_digest');
-        delete_transient('nfinite_site_health_digest_v2'); // in case older key was used
+        delete_transient('nfinite_site_health_digest_with_async');
+        delete_transient('nfinite_site_health_digest_direct_only');
+        delete_transient('nfinite_site_health_digest');     // legacy
+        delete_transient('nfinite_site_health_digest_v2');  // legacy
+
         $did_refresh_digest = true;
     }
 
