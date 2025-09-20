@@ -6,7 +6,7 @@ if ( ! defined('ABSPATH') ) exit;
  * - Pulls tests from /wp-json/wp-site-health/v1/tests/{direct|async}
  * - Filters to a curated set, normalizes, caches
  */
-function nfinite_get_site_health_digest( $force_refresh = false, $include_async = false ) {
+function nfinite_get_site_health_digest( $force_refresh = false, $include_async = true ) {
     if ( ! current_user_can('view_site_health_checks') ) {
         return array('error' => __('You do not have permission to view Site Health checks.', 'nfinite-audit'));
     }
