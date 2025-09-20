@@ -725,7 +725,7 @@ if ( ! function_exists('nfinite_get_site_health_digest') ) {
         delete_transient('nfinite_site_health_digest');     // legacy
         delete_transient('nfinite_site_health_digest_v2');  // legacy
 
-        $did_refresh_digest = true;
+        $did_refresh_digest = false;
     }
 
     // Build/refresh digest now (force on refresh; otherwise use cache)
