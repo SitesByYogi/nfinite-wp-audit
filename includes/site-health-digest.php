@@ -3,26 +3,13 @@ if ( ! defined('ABSPATH') ) exit;
 
 /**
  * Nfinite: Comprehensive Site Health Digest
- *
- * What this does:
- * - Collects Site Health tests from internal REST (if routes are registered) and from local callables.
- * - Filters out REST "group meta" rows that caused placeholders like "Recommended Data".
- * - Ensures key core tests are present by directly calling their public methods as a final pass.
- * - Normalizes, de-duplicates by slug (most severe wins), and safely coerces values for output.
- * - Caches results briefly in a transient.
- *
- * @param bool $force_refresh  If true, bypass the transient cache.
- * @param bool $include_async  If true, include async tests where available.
- * @return array {
- *   @type array  items      Normalized list of test items
- *   @type array  counts     ['critical'=>int,'recommended'=>int,'good'=>int]
- *   @type string refreshed  MySQL datetime of generation
- *   @type string site       Site name
- *   @type string source     'rest+local'|'rest-internal'|'local'|'reflect'|'none'
- *   @type string error      Optional message if nothing collected
- * }
+ * - Collect from REST, WP_Site_Health::get_tests(), and public get_test_* (reflect), then merge.
+ * - De-duplicate by slug (prefer most severe: critical > recommended > good).
+ * - Normalize payloads and avoid generic "Data" labels.
+ * - Cache briefly; pass $force_refresh=true to rebuild.
  */
 function nfinite_get_site_health_digest( $force_refresh = false, $include_async = true ) {
+    // Capabilities (older WP versions may lack view_site_health_checks)
     if ( ! current_user_can('view_site_health_checks') && ! current_user_can('manage_options') ) {
         return array('error' => __('You do not have permission to view Site Health checks.', 'nfinite-audit'));
     }
@@ -35,7 +22,8 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
         if ( $cached ) return $cached;
     }
 
-    // ----- helpers -----
+    // ---------------- helpers ----------------
+
     $map_status = function($s){
         $s = strtolower((string)$s);
         if ( in_array($s, array('critical','fail','error'), true) ) return 'critical';
@@ -46,30 +34,30 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
 
     $status_rank = function($s){
         $s = strtolower((string)$s);
-        if ($s === 'critical')    return 0;
-        if ($s === 'recommended') return 1;
-        return 2;
+        if ( $s === 'critical' )    return 0;
+        if ( $s === 'recommended' ) return 1;
+        return 2; // good / anything else
     };
 
-    $to_text = function($v){
-        if ( is_string($v) )  return $v;
-        if ( is_numeric($v) ) return (string)$v;
+    $to_text = function($v) {
+        if ( is_string($v) )   return $v;
+        if ( is_numeric($v) )  return (string)$v;
 
         if ( is_array($v) ) {
             foreach ( array('raw','rendered','message','text','value','content') as $k ) {
                 if ( isset($v[$k]) && is_string($v[$k]) ) return $v[$k];
             }
             $parts = array();
-            $walker = function($x) use (&$parts, &$walker){
-                if ( is_array($x) ) { foreach ($x as $y) $walker($y); }
+            $walker = function($x) use (&$parts, &$walker) {
+                if ( is_array($x) ) { foreach ($x as $xi) $walker($xi); }
                 elseif ( is_scalar($x) ) { $parts[] = (string)$x; }
             };
             $walker($v);
-            return implode(' ', $parts);
+            return $parts ? implode(' ', $parts) : '';
         }
 
         if ( is_object($v) ) {
-            if ( method_exists($v,'__toString') ) return (string)$v;
+            if ( method_exists($v, '__toString') ) return (string)$v;
             foreach ( array('rendered','raw','message','text','value','content') as $prop ) {
                 if ( isset($v->$prop) && is_string($v->$prop) ) return $v->$prop;
             }
@@ -80,21 +68,37 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
         return '';
     };
 
-    $to_html = function($v) use ($to_text){
+    $to_html = function($v) use ($to_text) {
         $s = $to_text($v);
-        return $s === '' ? '' : wp_kses_post($s);
+        return ($s === '') ? '' : wp_kses_post($s);
     };
 
-    $normalize = function($slug, $result) use ($to_text, $to_html, $map_status){
-        // Some third-party tests may push their own slugs with spaces — normalize anyway.
-        $safe_slug = sanitize_key( is_string($slug) ? $slug : $to_text($slug) );
-        if ( $safe_slug === '' ) {
-            // Fallback to a deterministic slug from label
-            $safe_slug = sanitize_key( substr( md5( $to_text( $result['label'] ?? '' ) ), 0, 10 ) );
+    $normalize = function($slug_hint, $result) use ($to_text, $to_html, $map_status) {
+        // Slug: prefer explicit fields; never allow literal "data"
+        $slug_source = '';
+        if ( !empty($result['test']) && is_string($result['test']) ) {
+            $slug_source = $result['test'];
+        } elseif ( !empty($result['slug']) && is_string($result['slug']) ) {
+            $slug_source = $result['slug'];
+        } else {
+            $slug_source = is_string($slug_hint) ? $slug_hint : $to_text($slug_hint);
+        }
+        $slug_source = trim((string)$slug_source);
+        if ($slug_source === '' || strtolower($slug_source) === 'data') {
+            $payload_for_hash = function_exists('maybe_serialize') ? maybe_serialize($result) : serialize($result);
+            $slug_source = 'test_' . substr( md5( $payload_for_hash ), 0, 8 );
+        }
+        $slug_source = str_replace('/', '_', $slug_source);
+        $slug = sanitize_key($slug_source);
+
+        // Label: prefer provided label; if empty or "data", humanize slug
+        $label_raw = isset($result['label']) ? $result['label'] : '';
+        $label_str = is_string($label_raw) ? trim($label_raw) : '';
+        if ($label_str === '' || strtolower($label_str) === 'data') {
+            $label_raw = ucfirst( trim( str_replace(array('_','-'), ' ', $slug) ) );
         }
 
-        $label_raw = isset($result['label']) ? $result['label'] : ucfirst( str_replace('_',' ', (string)$safe_slug) );
-
+        // Badge: support either scalar or ['label'=>..]
         $badge_val = '';
         if ( isset($result['badge']['label']) && is_string($result['badge']['label']) ) {
             $badge_val = sanitize_text_field($result['badge']['label']);
@@ -102,213 +106,198 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
             $badge_val = sanitize_text_field($result['badge']);
         }
 
+        // Actions: array or scalar → HTML
+        $actions_html = '';
+        if ( isset($result['actions']) ) {
+            if ( is_array($result['actions']) ) {
+                $lis = array();
+                foreach ($result['actions'] as $a) {
+                    $ah = $to_html($a);
+                    if ($ah !== '') $lis[] = '<li>'.$ah.'</li>';
+                }
+                if ($lis) $actions_html = '<ul class="ul-disc" style="margin-left:18px;">'.implode('', $lis).'</ul>';
+            } else {
+                $actions_html = $to_html($result['actions']);
+            }
+        }
+
         return array(
-            'slug'        => $safe_slug,
+            'slug'        => $slug,
             'status'      => $map_status( $result['status'] ?? 'recommended' ),
             'label'       => wp_strip_all_tags( is_string($label_raw) ? $label_raw : $to_text($label_raw) ),
             'description' => $to_html( $result['description'] ?? '' ),
             'badge'       => $badge_val,
-            'actions'     => $to_html( $result['actions'] ?? '' ),
+            'actions'     => $actions_html,
         );
     };
 
-    $merge_results = function(array $base, array $incoming) use ($status_rank){
+    $merge_results = function(array $base, array $incoming) use ($status_rank) {
         foreach ($incoming as $slug => $item) {
-            if ( ! isset($item['status']) || ! isset($item['label']) ) continue;
-            if ( ! isset($base[$slug]) ) { $base[$slug] = $item; continue; }
+            if (!isset($base[$slug])) { $base[$slug] = $item; continue; }
             $a = $base[$slug]; $b = $item;
             $ra = $status_rank($a['status']); $rb = $status_rank($b['status']);
             if ( $rb < $ra ) { $base[$slug] = $b; continue; }
             if ( $rb === $ra ) {
-                $a_has = ( ! empty($a['description']) || ! empty($a['actions']) );
-                $b_has = ( ! empty($b['description']) || ! empty($b['actions']) );
-                if ( $b_has && ! $a_has ) $base[$slug] = $b;
+                $a_has = (!empty($a['description']) || !empty($a['actions']));
+                $b_has = (!empty($b['description']) || !empty($b['actions']));
+                if ($b_has && !$a_has) $base[$slug] = $b;
             }
         }
         return $base;
     };
 
-    $by_slug      = array();
-    $used_rest    = false;
-    $used_local   = false;
-    $used_reflect = false;
+    // ---------------- collectors ----------------
 
-    // ----- REST collection (no manual do_action('rest_api_init')) -----
-    $routes_have_tests = false;
-    if ( function_exists('rest_get_server') ) {
+    // REST (internal dispatch; no manual rest_api_init)
+    $collect_from_rest = function($type) use ($normalize) {
+        if ( ! function_exists('rest_get_server') || ! function_exists('rest_do_request') || ! class_exists('WP_REST_Request') ) {
+            return array();
+        }
         $server = rest_get_server();
-        if ( $server && method_exists($server, 'get_routes') ) {
-            foreach ( $server->get_routes() as $route => $handlers ) {
-                if ( strpos($route, '/wp-site-health/v1/tests') === 0 ) { $routes_have_tests = true; break; }
-            }
+        if ( ! $server || ! method_exists($server, 'get_routes') ) return array();
+
+        // Check routes to avoid triggering plugins on rest_api_init
+        $routes = $server->get_routes();
+        $has_site_health = false;
+        foreach ( $routes as $route => $handlers ) {
+            if ( strpos($route, '/wp-site-health/v1/tests') === 0 ) { $has_site_health = true; break; }
         }
-    }
+        if ( ! $has_site_health ) return array();
 
-    if ( $routes_have_tests && function_exists('rest_do_request') && class_exists('WP_REST_Request') ) {
-        $dispatch = function($type){
-            try {
-                $req = new WP_REST_Request('GET', '/wp-site-health/v1/tests/' . $type);
-                $res = rest_do_request($req);
-                if ( is_wp_error($res) ) return null;
-                if ( $res instanceof WP_REST_Response ) return $res->get_data();
-                $server = rest_get_server();
-                return $server ? $server->response_to_data($res, false) : null;
-            } catch (Throwable $e) {
-                return null;
-            }
-        };
+        try {
+            $req = new WP_REST_Request('GET', '/wp-site-health/v1/tests/' . $type);
+            $res = rest_do_request($req);
+        } catch (Throwable $e) {
+            return array();
+        }
 
-        // Accept both shapes:
-        // (A) flat: [ { test, status, label, ... }, ... ]
-        // (B) grouped:
-        //     {
-        //       critical:    { label: "...", tests: [ ... ] },
-        //       recommended: { label: "...", tests: [ ... ] },
-        //       good:        { label: "...", tests: [ ... ] }
-        //     }
-        $collect = function($payload) use ($normalize){
-            $tmp = array();
-            if ( ! is_array($payload) ) return $tmp;
+        if ( is_wp_error($res) ) return array();
 
-            $looks_grouped =
-                ( isset($payload['critical'])    && is_array($payload['critical'])    && isset($payload['critical']['tests']) )
-             || ( isset($payload['recommended']) && is_array($payload['recommended']) && isset($payload['recommended']['tests']) )
-             || ( isset($payload['good'])        && is_array($payload['good'])        && isset($payload['good']['tests']) );
+        $data = null;
+        if ( $res instanceof WP_REST_Response ) {
+            $data = $res->get_data();
+        } else {
+            $data = $server->response_to_data($res, false);
+        }
+        if ( ! is_array($data) ) return array();
 
-            if ( $looks_grouped ) {
-                foreach ( array('critical','recommended','good') as $grp ) {
-                    if ( empty($payload[$grp]['tests']) || ! is_array($payload[$grp]['tests']) ) continue;
+        $out = array();
+        $i = 0;
+        foreach ( $data as $k => $result ) {
+            if ( ! is_array($result) ) continue;
 
-                    $group_label = isset($payload[$grp]['label']) ? (string)$payload[$grp]['label'] : '';
-                    $i = 0;
-                    foreach ( $payload[$grp]['tests'] as $result ) {
-                        if ( ! is_array($result) ) continue;
-
-                        // Ignore accidental "group meta" rows (some environments leak these through).
-                        if ( empty($result['test']) && empty($result['slug']) ) {
-                            // If this row "label" equals the group label or is a short generic word like "Data", skip it.
-                            $lbl = isset($result['label']) ? (string)$result['label'] : '';
-                            if ( $lbl === $group_label || in_array( strtolower($lbl), array('data','summary','meta'), true ) ) {
-                                continue;
-                            }
-                        }
-
-                        if ( empty($result['status']) ) $result['status'] = $grp;
-
-                        $slug = '';
-                        if ( ! empty($result['test']) && is_string($result['test']) ) {
-                            $slug = $result['test'];
-                        } elseif ( ! empty($result['slug']) && is_string($result['slug']) ) {
-                            $slug = $result['slug'];
-                        } else {
-                            // Build a readable slug from label to aid de-duping.
-                            $lbl = isset($result['label']) ? (string)$result['label'] : ($grp . '_' . $i);
-                            $slug = sanitize_key( $lbl !== '' ? $lbl : ($grp . '_' . $i) );
-                        }
-
-                        $tmp[$slug] = $normalize($slug, $result);
-                        $i++;
-                    }
-                }
-                return $tmp;
+            // Best-effort slug hint
+            $slug_hint = '';
+            if ( is_string($k) && $k !== '' && !is_numeric($k) && strtolower($k) !== 'data' ) {
+                $slug_hint = $k;
+            } elseif ( !empty($result['test']) && is_string($result['test']) ) {
+                $slug_hint = $result['test'];
+            } elseif ( !empty($result['slug']) && is_string($result['slug']) ) {
+                $slug_hint = $result['slug'];
+            } else {
+                $slug_hint = $type . '_' . ($i++);
             }
 
-            // Flat list fallback
-            $i = 0;
-            foreach ( $payload as $k => $result ) {
-                if ( ! is_array($result) ) continue;
-
-                // Skip obvious meta rows
-                if ( empty($result['test']) && empty($result['slug']) ) {
-                    $lbl = isset($result['label']) ? (string)$result['label'] : '';
-                    if ( in_array(strtolower($lbl), array('data','summary','meta','results'), true) ) continue;
-                }
-
-                $slug = ( is_string($k) && $k !== '' && ! is_numeric($k) )
-                    ? $k
-                    : ( ! empty($result['test']) && is_string($result['test']) ? $result['test']
-                        : ( ! empty($result['slug']) && is_string($result['slug']) ? $result['slug'] : 'test_' . $i++ ) );
-
-                $tmp[$slug] = $normalize($slug, $result);
-            }
-            return $tmp;
-        };
-
-        $direct = $dispatch('direct');
-        if ( is_array($direct) ) { $by_slug = $merge_results($by_slug, $collect($direct)); $used_rest = true; }
-
-        if ( $include_async ) {
-            $async = $dispatch('async');
-            if ( is_array($async) ) { $by_slug = $merge_results($by_slug, $collect($async)); $used_rest = true; }
+            $norm = $normalize($slug_hint, $result);
+            if (!empty($norm['slug'])) $out[$norm['slug']] = $norm;
         }
-    }
-
-    // ----- Local callables (always try; they often include core + plugins) -----
-    if ( ! class_exists('WP_Site_Health') ) {
-        require_once ABSPATH . 'wp-admin/includes/class-wp-site-health.php';
-    }
-    $health = new WP_Site_Health();
-    $tests  = $health->get_tests();
-
-    $run_callable = function($def) use ($health){
-        if ( empty($def['test']) ) return null;
-        $cb = $def['test'];
-        if ( is_callable($cb) ) {
-            try { return call_user_func($cb); } catch (Throwable $e) { return null; }
-        }
-        if ( is_string($cb) && method_exists($health, $cb) ) {
-            try { return call_user_func(array($health, $cb)); } catch (Throwable $e) { return null; }
-        }
-        return null;
+        return $out;
     };
 
-    $tmp_local = array();
-    foreach ( array('direct','async') as $type ) {
-        if ( $type === 'async' && ! $include_async ) continue;
-        if ( ! empty($tests[$type]) && is_array($tests[$type]) ) {
+    // LOCAL (get_tests + callables)
+    $collect_from_local = function($include_async) use ($normalize) {
+        if ( ! class_exists('WP_Site_Health') ) {
+            require_once ABSPATH . 'wp-admin/includes/class-wp-site-health.php';
+        }
+        $health = new WP_Site_Health();
+        $tests  = $health->get_tests();
+
+        $run = function($def) use ($health) {
+            if ( empty($def['test']) ) return null;
+            $cb = $def['test'];
+            if ( is_callable($cb) ) return call_user_func($cb);
+            if ( is_string($cb) && method_exists($health, $cb) && is_callable(array($health, $cb)) ) {
+                return call_user_func(array($health, $cb));
+            }
+            return null; // do not call private perform_test
+        };
+
+        $out = array();
+        foreach ( array('direct','async') as $type ) {
+            if ($type==='async' && !$include_async) continue;
+            if ( empty($tests[$type]) || !is_array($tests[$type]) ) continue;
+
             $i = 0;
-            foreach ( $tests[$type] as $k => $def ) {
-                $res = $run_callable($def);
-                if ( is_array($res) ) {
-                    $slug = ( is_string($k) && $k !== '' && ! is_numeric($k) )
-                        ? $k
-                        : ( ! empty($def['test']) && is_string($def['test']) ? $def['test'] : ('local_' . $i++) );
-                    $tmp_local[$slug] = $normalize($slug, $res);
-                    $i++;
-                }
+            foreach ($tests[$type] as $k => $def) {
+                try { $res = $run($def); } catch (Throwable $e) { $res = null; }
+                if (!is_array($res)) continue;
+
+                $slug_hint = '';
+                if (!empty($def['test']) && is_string($def['test'])) $slug_hint = $def['test'];
+                elseif (is_string($k) && $k !== '' && !is_numeric($k) && strtolower($k)!=='data') $slug_hint = $k;
+                else $slug_hint = $type.'_'.($i++);
+
+                $norm = $normalize($slug_hint, $res);
+                if (!empty($norm['slug'])) $out[$norm['slug']] = $norm;
             }
         }
-    }
-    if ( $tmp_local ) { $by_slug = $merge_results($by_slug, $tmp_local); $used_local = true; }
 
-    // ----- Must-have core tests (final safety net) -----
-    // WordPress versions vary in method names; try a list until we hit.
-    $must_have_methods = array(
-        // Display errors / debug
-        'get_test_php_display_errors', 'get_test_is_in_debug_mode', 'get_test_debug_enabled',
-        // PHP version
-        'get_test_php_version', 'get_test_php_version_is_secure',
-        // Object cache
-        'get_test_persistent_object_cache', 'get_test_object_cache',
-        // Inactive plugins
-        'get_test_inactive_plugins',
-    );
+        return $out;
+    };
 
-    $tmp_core = array();
-    foreach ( $must_have_methods as $m ) {
-        if ( method_exists($health, $m) && is_callable(array($health, $m)) ) {
-            try {
-                $res = call_user_func(array($health, $m));
-                if ( is_array($res) ) {
-                    $slug = preg_match('~^get_test_(.+)$~', $m, $mm) ? $mm[1] : $m;
-                    $tmp_core[$slug] = $normalize($slug, $res);
-                }
-            } catch (Throwable $e) {}
+    // REFLECT (public get_test_* methods)
+    $collect_from_reflect = function() use ($normalize) {
+        if ( ! class_exists('WP_Site_Health') ) {
+            require_once ABSPATH . 'wp-admin/includes/class-wp-site-health.php';
         }
-    }
-    if ( $tmp_core ) { $by_slug = $merge_results($by_slug, $tmp_core); $used_reflect = true; }
+        $health  = new WP_Site_Health();
+        $methods = get_class_methods($health);
+        $out     = array();
 
-    // ----- Finish -----
+        foreach ( (array) $methods as $m ) {
+            if ( strpos($m, 'get_test_') !== 0 ) continue;
+            try {
+                $res = call_user_func( array($health, $m) );
+            } catch (Throwable $e) {
+                $res = null;
+            }
+            if ( is_array($res) ) {
+                $slug_hint = substr($m, 9); // after "get_test_"
+                if ( $slug_hint === '' || strtolower($slug_hint) === 'data' ) {
+                    $payload_for_hash = function_exists('maybe_serialize') ? maybe_serialize($res) : serialize($res);
+                    $slug_hint = 'reflect_' . substr( md5( $payload_for_hash ), 0, 8 );
+                }
+                $norm = $normalize($slug_hint, $res);
+                if (!empty($norm['slug'])) $out[$norm['slug']] = $norm;
+            }
+        }
+        return $out;
+    };
+
+    // ---------- collect from all sources and merge ----------
+
+    $by_slug = array();
+    $used    = array();
+
+    // REST
+    $direct_r = $collect_from_rest('direct');
+    if ($direct_r) { $by_slug = array_merge($by_slug, $direct_r); $used['rest'] = true; }
+
+    if ($include_async) {
+        $async_r  = $collect_from_rest('async');
+        if ($async_r) { $by_slug = $merge_results($by_slug, $async_r); $used['rest'] = true; }
+    }
+
+    // LOCAL
+    $local = $collect_from_local($include_async);
+    if ($local) { $by_slug = $merge_results($by_slug, $local); $used['local'] = true; }
+
+    // REFLECT
+    $reflect = $collect_from_reflect();
+    if ($reflect) { $by_slug = $merge_results($by_slug, $reflect); $used['reflect'] = true; }
+
+    // ---------- finish ----------
+
     $items = array_values($by_slug);
 
     if ( empty($items) ) {
@@ -326,37 +315,32 @@ function nfinite_get_site_health_digest( $force_refresh = false, $include_async 
         $order = array('critical'=>0,'recommended'=>1,'good'=>2);
         $ac = $order[$a['status']] ?? 9;
         $bc = $order[$b['status']] ?? 9;
-        if ( $ac === $bc ) return strcasecmp($a['label'], $b['label']);
+        if ($ac === $bc) return strcasecmp($a['label'], $b['label']);
         return $ac <=> $bc;
     });
 
     $counts = array('critical'=>0,'recommended'=>0,'good'=>0);
     foreach ($items as $it) {
-        if ( isset($counts[$it['status']]) ) $counts[$it['status']]++;
+        if (isset($counts[$it['status']])) $counts[$it['status']]++;
     }
 
-    $source = ($used_rest && $used_local) ? 'rest+local'
-            : ($used_rest ? 'rest-internal'
-            : ($used_local ? 'local'
-            : ($used_reflect ? 'reflect' : 'none')));
+    $src = empty($used) ? 'none' : implode('+', array_keys($used));
 
     $payload = array(
         'items'      => $items,
         'counts'     => $counts,
         'refreshed'  => current_time('mysql'),
         'site'       => get_bloginfo('name'),
-        'source'     => $source,
+        'source'     => $src,
     );
 
     set_transient( $cache_key, $payload, 5 * MINUTE_IN_SECONDS );
     return $payload;
 }
 
-/**
- * Map digest status to badge classes for the admin UI.
- */
+/** Status → CSS class for your UI */
 function nfinite_health_status_class( $status ) {
-    switch ( $status ) {
+    switch ($status) {
         case 'critical':    return 'nfinite-badge nfinite-badge-danger';
         case 'recommended': return 'nfinite-badge nfinite-badge-warn';
         default:            return 'nfinite-badge nfinite-badge-good';

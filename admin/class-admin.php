@@ -61,6 +61,16 @@ if ( ! function_exists('nfinite_get_site_health_digest') ) {
             array(__CLASS__, 'render_health_page')
         );
 
+        // Add after Site Health submenu:
+       add_submenu_page(
+            'nfinite-audit',
+            'Theme & Plugin Review · Nfinite Audit',
+            'Theme & Plugin Review',
+            'manage_options',
+            'nfinite-audit-review',
+            array(__CLASS__, 'render_review_page')
+        );
+
         add_submenu_page(
             'nfinite-audit',
             'Settings · Nfinite Audit',
@@ -147,7 +157,8 @@ if ( ! function_exists('nfinite_get_site_health_digest') ) {
         $allowed = array(
             'toplevel_page_nfinite-audit',
             'nfinite-audit_page_nfinite-audit-settings',
-            'nfinite-audit_page_nfinite-audit-health' // NEW page
+            'nfinite-audit_page_nfinite-audit-health',
+            'nfinite-audit_page_nfinite-audit-review'
         );
         if ( ! in_array($hook, $allowed, true) ) return;
 
@@ -700,6 +711,97 @@ if ( ! function_exists('nfinite_get_site_health_digest') ) {
         </div>
         <?php
     }
+
+    public static function render_review_page() {
+    if ( ! current_user_can('manage_options') ) return;
+
+    $default_url = home_url('/');
+    $probe_url   = isset($_POST['nfa_probe_url']) ? esc_url_raw($_POST['nfa_probe_url']) : $default_url;
+
+    $force = false;
+    if ( isset($_POST['nfa_review_action']) && $_POST['nfa_review_action']==='refresh' && check_admin_referer('nfa_review_refresh') ) {
+        delete_transient('nfinite_review_last');
+        $force = true;
+    }
+
+    if ( ! class_exists('Nfinite_Review_Scanner') ) {
+        echo '<div class="wrap"><h1>Theme & Plugin Review</h1><div class="notice notice-error"><p>Scanner class not found.</p></div></div>';
+        return;
+    }
+
+    $report = Nfinite_Review_Scanner::run($probe_url, $force);
+    if ( ! empty($report['_debug']) ) {
+  echo '<p class="nfinite-help">Debug: head JS '.$report['_debug']['head_js'].' / CSS '.$report['_debug']['head_css'].' • foot JS '.$report['_debug']['foot_js'].' / CSS '.$report['_debug']['foot_css'].' • html JS '.$report['_debug']['html_js'].' / CSS '.$report['_debug']['html_css'].' • html bytes '.$report['_debug']['html_len'].'</p>';
+}
+    ?>
+    
+    <div class="wrap nfinite-wrap">
+      <h1>Theme & Plugin Review · Nfinite Audit</h1>
+
+      <div class="nfinite-card" style="margin:12px 0;">
+        <div class="nfinite-card__header">
+          <h2 class="nfinite-h" style="margin:0">Controls</h2>
+          <div style="display:flex;align-items:center;gap:10px">
+            <form method="post" action="<?php echo esc_url( admin_url('admin.php?page=nfinite-audit-review') ); ?>" style="margin:0;display:flex;gap:10px;align-items:center">
+              <?php wp_nonce_field('nfa_review_refresh'); ?>
+              <input type="url" name="nfa_probe_url" value="<?php echo esc_attr($probe_url); ?>" placeholder="https://example.com/page/" style="width:360px;max-width:100%;">
+              <input type="hidden" name="nfa_review_action" value="refresh">
+              <button class="button" type="submit">Refresh</button>
+            </form>
+            <span class="description">Last checked: <?php echo esc_html($report['refreshed'] ?? '—'); ?></span>
+          </div>
+        </div>
+        <div class="nfinite-detail">
+          <p class="nfinite-help">We analyze front-end assets (from the URL above), autoloaded options, common meta, and code size to identify heavy plugins and themes.</p>
+        </div>
+      </div>
+
+      <?php
+      $top = $report['top'] ?? array();
+      if ( empty($top) ) {
+          echo '<div class="notice notice-warning"><p>No assets were detected. If this persists, try a page that loads scripts (e.g., a product page), and ensure the probe URL is publicly reachable from the server.</p></div>';
+      } else {
+          echo '<section class="nfinite-section">';
+          echo '<h2 class="nfinite-section-title">Top Offenders</h2>';
+          echo '<div class="nfinite-cards full">';
+          foreach ($top as $row) {
+              $badge = '<span class="nfinite-badge ' . esc_attr($row['grade']) . '">' . esc_html($row['grade']) . '</span>';
+              echo '<div class="nfinite-card"><div class="nfinite-detail">';
+              echo '<div class="nfinite-h" style="display:flex;justify-content:space-between;align-items:center;">';
+              echo '<span>'. esc_html(ucfirst($row['type'])) .': '. esc_html($row['name']) . ( $row['version'] ? ' · v'.esc_html($row['version']) : '' ) .'</span>';
+              echo $badge;
+              echo '</div>';
+              echo '<p><strong>Assets:</strong> ' . (int)$row['assets']['scripts'] . ' JS, ' . (int)$row['assets']['styles'] . ' CSS, ' . size_format((int)$row['assets']['bytes']) . '</p>';
+              echo '<p><strong>Autoload:</strong> ' . size_format((int)$row['autoload_bytes']) . ' · <strong>Meta rows:</strong> ' . (int)$row['meta_rows'] . ' · <strong>Code size:</strong> ' . size_format((int)$row['code_bytes']) . '</p>';
+              echo '<p class="nfinite-help">Score: ' . (int)$row['score'] . ' (lower is heavier; grade is normalized)</p>';
+              echo '</div></div>';
+          }
+          echo '</div></section>';
+
+          echo '<section class="nfinite-section"><h2 class="nfinite-section-title">All measured items</h2>';
+          echo '<div class="nfinite-card"><div class="nfinite-detail"><table class="widefat striped"><thead><tr>';
+          echo '<th>Type</th><th>Name</th><th>Grade</th><th>JS</th><th>CSS</th><th>Asset bytes</th><th>Autoload</th><th>Meta rows</th><th>Code bytes</th><th>Score</th>';
+          echo '</tr></thead><tbody>';
+          foreach ($report['items'] as $row) {
+              echo '<tr>';
+              echo '<td>'.esc_html($row['type']).'</td>';
+              echo '<td>'.esc_html($row['name']).'</td>';
+              echo '<td><span class="nfinite-badge '.esc_attr($row['grade']).'">'.esc_html($row['grade']).'</span></td>';
+              echo '<td>'.(int)$row['assets']['scripts'].'</td>';
+              echo '<td>'.(int)$row['assets']['styles'].'</td>';
+              echo '<td>'.esc_html( size_format((int)$row['assets']['bytes']) ).'</td>';
+              echo '<td>'.esc_html( size_format((int)$row['autoload_bytes']) ).'</td>';
+              echo '<td>'.(int)$row['meta_rows'].'</td>';
+              echo '<td>'.esc_html( size_format((int)$row['code_bytes']) ).'</td>';
+              echo '<td>'.(int)$row['score'].'</td>';
+              echo '</tr>';
+          }
+          echo '</tbody></table></div></div></section>';
+      }
+      ?>
+    </div>
+    <?php
+}
 
     /**
  * NEW: Site Health page

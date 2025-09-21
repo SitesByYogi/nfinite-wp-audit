@@ -20,6 +20,9 @@ require_once NFINITE_AUDIT_PATH . 'includes/class-cache-layers-scanner.php';
 require_once NFINITE_AUDIT_PATH . 'admin/class-admin.php';
 // In nfinite-site-audit.php (main plugin bootstrap)
 require_once NFINITE_AUDIT_PATH . 'includes/site-health-digest.php';
+require_once NFINITE_AUDIT_PATH . 'includes/frontend-probe.php';
+require_once NFINITE_AUDIT_PATH . 'includes/class-review-scanner.php';
+
 
 
 // Boot the admin UI
