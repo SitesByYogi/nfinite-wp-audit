@@ -1,30 +1,29 @@
 <?php
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-function nfinite_estimate_lighthouse($internal){
-    $checks = $internal['checks'] ?? array();
-    $assets = (int)($checks['assets_counts']['score'] ?? 80);
-    $block  = (int)($checks['render_blocking']['score'] ?? 80);
-    $ttfb   = (int)($checks['ttfb']['score'] ?? 80);
-    $compr  = (int)($checks['compression']['score'] ?? 80);
-    $imgs   = (int)($checks['images_dims_and_size']['score'] ?? 90);
+if ( ! function_exists( 'nfinite_estimate_lighthouse' ) ) {
+    /**
+     * Heuristic/estimated Lighthouse scores when PSI is unavailable.
+     * Uses internal section scores as a proxy.
+     */
+    function nfinite_estimate_lighthouse( array $internal ) : array {
+        $sections = isset($internal['sections']) && is_array($internal['sections']) ? $internal['sections'] : array();
+        $get = function($key, $default = 0) use ($sections) {
+            return isset($sections[$key]['score']) ? (int)$sections[$key]['score'] : $default;
+        };
 
-    $perf = (int) round( ($assets + $block + $ttfb + $compr + $imgs) / 5 );
+        // Very simple baselines; tweak as you wish
+        $performance    = (int) round( ( $get('caching') + $get('assets') + $get('images') + $get('server') ) / 4 );
+        $best_practices = (int) round( ( $get('core') + $get('database') + $get('server') ) / 3 );
+        $seo            = isset($sections['seo_basics']['score']) ? (int)$sections['seo_basics']['score'] : 0;
 
-    $client = (int)($checks['client_cache']['score'] ?? 80);
-    $h2h3   = (int)($checks['h2_h3']['score'] ?? 70);
-    $bp = (int) round( ($compr + $client + $h2h3 + $assets) / 4 );
-
-    $seo = 90;
-    if ($assets < 50 || $ttfb < 60) $seo = 80;
-    if ($assets < 30 || $ttfb < 40) $seo = 70;
-
-    return array(
-        'performance' => max(0,min(100,$perf)),
-        'best_practices' => max(0,min(100,$bp)),
-        'seo' => max(0,min(100,$seo)),
-        '_estimated' => true
-    );
+        return array(
+            'performance'    => max(0, min(100, $performance)),
+            'best_practices' => max(0, min(100, $best_practices)),
+            'seo'            => max(0, min(100, $seo)),
+            '_estimated'     => true,
+        );
+    }
 }
 
 function nfinite_recommendations_registry(){
