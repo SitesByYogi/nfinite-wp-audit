@@ -1,24 +1,32 @@
 <?php
 if ( ! defined( 'ABSPATH' ) ) exit;
 
+// Ensure the SEO Basics scanner is available
+if ( ! class_exists( 'Nfinite_SEO_Basics' ) ) {
+    require_once NFINITE_AUDIT_PATH . 'includes/class-seo-basics.php';
+}
+
 class Nfinite_Audit_V1 {
 
+    /**
+     * Fetch HTML with headers for a URL.
+     */
     private static function fetch_html($url) {
         $args = array(
-            'timeout' => 15,
+            'timeout'     => 15,
             'redirection' => 5,
-            'headers' => array(
-                'User-Agent' => 'NfiniteAudit/' . (defined('NFINITE_AUDIT_VER') ? NFINITE_AUDIT_VER : 'dev') . ' (+' . home_url('/') . ')',
-                'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Encoding' => 'gzip, deflate, br',
+            'headers'     => array(
+                'User-Agent'       => 'NfiniteAudit/' . (defined('NFINITE_AUDIT_VER') ? NFINITE_AUDIT_VER : 'dev') . ' (+' . home_url('/') . ')',
+                'Accept'           => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Encoding'  => 'gzip, deflate, br',
             ),
         );
         $res = wp_remote_get($url, $args);
         if (is_wp_error($res)) {
             return array('ok'=>false, 'error'=>$res->get_error_message(), 'html'=>'', 'headers'=>array(), 'code'=>0);
         }
-        $code = (int) wp_remote_retrieve_response_code($res);
-        $html = (string) wp_remote_retrieve_body($res);
+        $code    = (int) wp_remote_retrieve_response_code($res);
+        $html    = (string) wp_remote_retrieve_body($res);
         $headers = wp_remote_retrieve_headers($res);
         return array('ok'=>($code>=200 && $code<400), 'error'=>'', 'html'=>$html, 'headers'=>$headers, 'code'=>$code);
     }
@@ -44,10 +52,52 @@ class Nfinite_Audit_V1 {
         return 'F';
     }
 
+    /**
+     * Standalone SEO Basics runner (ONLY used on the SEO Basics page).
+     * Returns compact array: score/grade + full details from Nfinite_SEO_Basics.
+     */
+    public static function run_seo_basics($url = null) : array {
+        $tgt = $url ? $url : home_url('/');
+        $got = self::fetch_html($tgt);
+
+        if (empty($got['ok'])) {
+            $details = array(
+                'score'    => 0,
+                'grade'    => 'F',
+                'checks'   => array(
+                    'title'            => array('exists'=>false,'text'=>'','length'=>0,'score'=>0,'issues'=>array()),
+                    'meta_description' => array('exists'=>false,'text'=>'','length'=>0,'score'=>0,'issues'=>array()),
+                    'h1'               => array('count'=>0,'texts'=>array(),'score'=>0,'issues'=>array()),
+                ),
+                'messages' => array( 'Could not retrieve HTML for SEO checks.' ),
+            );
+            return array(
+                'url'     => $tgt,
+                'score'   => 0,
+                'grade'   => 'F',
+                'details' => $details,
+            );
+        }
+
+        $html    = (string) $got['html'];
+        $details = Nfinite_SEO_Basics::analyze($html, $tgt);
+
+        return array(
+            'url'     => $tgt,
+            'score'   => isset($details['score']) ? (int)$details['score'] : 0,
+            'grade'   => isset($details['grade']) ? $details['grade'] : self::grade_from_score( (int) ($details['score'] ?? 0) ),
+            'details' => $details,
+        );
+    }
+
+    /**
+     * Internal (non-SEO) audit used by the Dashboard.
+     * NOTE: No SEO Basics logic lives here anymore.
+     */
     public static function run_internal_audit($test_url = null) : array {
         $url = $test_url ? $test_url : home_url('/');
 
-        $checks = array();
+        $checks   = array();
         $sections = array();
 
         $checks['cache_present'] = self::check_cache_present($url);
@@ -62,7 +112,7 @@ class Nfinite_Audit_V1 {
         $checks['images_dims_and_size'] = self::check_images_dims_and_size($url);
         $sections['images']['score'] = (int)$checks['images_dims_and_size']['score'];
 
-        $checks['ttfb'] = self::check_ttfb($url);
+        $checks['ttfb']  = self::check_ttfb($url);
         $checks['h2_h3'] = self::check_h2_h3($url);
         $sections['server']['score'] = self::avg_scores(array($checks['ttfb'],$checks['h2_h3']));
 
@@ -93,6 +143,10 @@ class Nfinite_Audit_V1 {
         if (!$vals) return 0;
         return (int) round(array_sum($vals)/count($vals));
     }
+
+    // ------------------------------
+    // Individual checks (non-SEO)
+    // ------------------------------
 
     public static function check_images_dims_and_size($url = null) : array {
         $tgt = $url ? $url : home_url('/');

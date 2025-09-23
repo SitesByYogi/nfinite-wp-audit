@@ -15,7 +15,16 @@ class Nfinite_Audit_Admin {
         add_action('admin_post_nfinite_run_audit_now', array(__CLASS__, 'handle_run_audit'));
 
         // AJAX
-        add_action('wp_ajax_nfinite_test_psi', array(__CLASS__, 'ajax_test_psi'));
+        add_action('wp_ajax_nfinite_test_psi',        array(__CLASS__, 'ajax_test_psi'));
+        add_action('wp_ajax_nfinite_run_seo_basics',  array(__CLASS__, 'ajax_run_seo_basics')); // NEW: SEO-only test
+
+        // Digest helper
+        if ( ! function_exists('nfinite_get_site_health_digest') ) {
+            $digest_file = dirname(__DIR__) . '/includes/site-health-digest.php';
+            if ( file_exists($digest_file) ) {
+                require_once $digest_file;
+            }
+        }
     }
 
     /**
@@ -41,7 +50,7 @@ class Nfinite_Audit_Admin {
             array(__CLASS__, 'render_dashboard_page')
         );
 
-        // NEW: dedicated Site Health page
+        // Site Health page
         add_submenu_page(
             'nfinite-audit',
             'Site Health · Nfinite Audit',
@@ -51,6 +60,27 @@ class Nfinite_Audit_Admin {
             array(__CLASS__, 'render_health_page')
         );
 
+        // Theme & Plugin Review
+        add_submenu_page(
+            'nfinite-audit',
+            'Theme & Plugin Review · Nfinite Audit',
+            'Theme & Plugin Review',
+            'manage_options',
+            'nfinite-audit-review',
+            array(__CLASS__, 'render_review_page')
+        );
+
+        // SEO Basics page (dedicated)
+        add_submenu_page(
+            'nfinite-audit',
+            'SEO Basics · Nfinite Audit',
+            'SEO Basics',
+            'manage_options',
+            'nfinite-audit-seo',
+            array(__CLASS__, 'render_seo_page')
+        );
+
+        // Settings
         add_submenu_page(
             'nfinite-audit',
             'Settings · Nfinite Audit',
@@ -131,20 +161,21 @@ class Nfinite_Audit_Admin {
     }
 
     /**
-     * Enqueue styles/scripts on plugin screens only
+     * Admin assets on plugin screens only
      */
     public static function enqueue_admin_css( $hook ) {
         $allowed = array(
             'toplevel_page_nfinite-audit',
             'nfinite-audit_page_nfinite-audit-settings',
-            'nfinite-audit_page_nfinite-audit-health' // NEW page
+            'nfinite-audit_page_nfinite-audit-health',
+            'nfinite-audit_page_nfinite-audit-review',
+            'nfinite-audit_page_nfinite-audit-seo', // NEW: allow assets on SEO page
         );
         if ( ! in_array($hook, $allowed, true) ) return;
 
         wp_enqueue_style('nfinite-admin', NFINITE_AUDIT_URL . 'assets/admin.css', array(), NFINITE_AUDIT_VER);
         wp_enqueue_script('nfinite-admin', NFINITE_AUDIT_URL . 'assets/admin.js', array('jquery'), NFINITE_AUDIT_VER, true);
 
-        // Inline CSS tokens (layout + badges + digest list)
         $css = ''
         . '.nfinite-wrap{max-width:1100px}'
         . '.nfinite-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;align-items:start}'
@@ -156,15 +187,9 @@ class Nfinite_Audit_Admin {
         . '.nfinite-score{font-size:28px;font-weight:800}'
         . '.nfinite-detail{padding:0 16px 14px 16px;border-top:1px solid #e5e7eb}'
         . '.nfinite-badge{display:inline-block;padding:4px 8px;border-radius:999px;font-weight:700;font-size:12px}'
-
-        // Grade badges (A–F)
         . '.A{background:#ecfdf5;color:#065f46}.B{background:#eff6ff;color:#1e40af}.C{background:#fef3c7;color:#92400e}.D{background:#fee2e2;color:#991b1b}.F{background:#fef2f2;color:#991b1b}'
-
-        // Section disclosure chevron
         . 'details.nfinite-card.section summary .chev{margin-left:8px;display:inline-block;transform:rotate(0deg);transition:transform .2s ease;font-size:18px;line-height:1}'
         . 'details.nfinite-card.section[open] summary .chev{transform:rotate(180deg)}'
-
-        // Inline checks + chips
         . '.nfinite-check{margin:8px 0;padding:10px;border:1px solid #e5e7eb;border-radius:10px;background:#fff}'
         . '.nfinite-check .head{display:flex;align-items:center;justify-content:space-between;gap:10px}'
         . '.nfinite-check .label{font-weight:600;color:#111827}'
@@ -173,8 +198,6 @@ class Nfinite_Audit_Admin {
         . '.nfinite-reco{margin-top:8px;padding:10px;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb}'
         . '.nfinite-help{color:#6b7280;font-size:13px;margin-top:6px}'
         . '.nfinite-section{margin-top:18px}.nfinite-section-title{margin:16px 0 8px}'
-
-        // Site Health Digest list
         . '.nfinite-card__header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #e5e7eb}'
         . '.nfinite-list{padding:8px 16px}'
         . '.nfinite-list__item{padding:12px 0;border-bottom:1px solid #f1f5f9}'
@@ -183,13 +206,10 @@ class Nfinite_Audit_Admin {
         . '.nfinite-badge-warn{background:#fffbeb;color:#92400e}'
         . '.nfinite-badge-danger{background:#fef2f2;color:#991b1b}'
         . '.nfinite-badge-muted{background:#f3f4f6;color:#374151}'
-
-        // Responsive
         . '@media (max-width:1200px){.nfinite-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}'
         . '@media (max-width:782px){.nfinite-cards,.nfinite-cards.full{grid-template-columns:1fr}}';
         wp_add_inline_style('nfinite-admin', $css);
 
-        // Localize for assets/admin.js if needed
         wp_localize_script('nfinite-admin', 'NFINITE_AUDIT_VARS', array(
             'ajax_url' => admin_url('admin-ajax.php'),
             'nonce'    => wp_create_nonce('nfinite_test_psi'),
@@ -197,7 +217,7 @@ class Nfinite_Audit_Admin {
     }
 
     /**
-     * Convert score to A–F badge (uses your existing grading helper)
+     * A–F badge
      */
     public static function grade_badge( $score ) {
         $grade = Nfinite_Audit_V1::grade_from_score( (int) $score );
@@ -205,7 +225,7 @@ class Nfinite_Audit_Admin {
     }
 
     /**
-     * PSI AJAX (mobile + desktop) with internal fallback
+     * PSI AJAX (dashboard only)
      */
     public static function ajax_test_psi() {
         if ( ! current_user_can('manage_options') ) wp_send_json_error(array('message' => 'Unauthorized'), 403);
@@ -214,7 +234,7 @@ class Nfinite_Audit_Admin {
         $url = isset($_POST['url']) ? esc_url_raw($_POST['url']) : '';
         if ( empty($url) ) wp_send_json_error(array('message' => 'Missing URL'), 400);
 
-        // Internal baseline
+        // Internal baseline (NO SEO in internal)
         $internal = Nfinite_Audit_V1::run_internal_audit($url);
 
         // Credentials
@@ -243,6 +263,7 @@ class Nfinite_Audit_Admin {
             }
             $overall_est = $parts ? (int) round(array_sum($parts) / count($parts)) : 0;
 
+            // Persist minimal dashboard payload
             $payload = array(
                 'timestamp'     => current_time('Y-m-d H:i:s'),
                 'url'           => $url,
@@ -292,7 +313,7 @@ class Nfinite_Audit_Admin {
         $vitals_src  = $psi_ok ? ( $primary['vitals_source'] ?? 'none' ) : 'none';
         $finalUrl    = $psi_ok ? ( $primary['finalUrl'] ?? $url ) : $url;
 
-        // Build overall blended score
+        // Build blended overall (no SEO Basics injection)
         $parts = array();
         $sections = isset($internal['sections']) ? $internal['sections'] : array();
         if ( is_array($sections) ) {
@@ -308,7 +329,6 @@ class Nfinite_Audit_Admin {
         }
         $overall = $parts ? (int) round(array_sum($parts) / count($parts)) : 0;
 
-        // Persist last payload
         $payload = array(
             'timestamp'     => current_time('Y-m-d H:i:s'),
             'url'           => $url,
@@ -326,7 +346,6 @@ class Nfinite_Audit_Admin {
         );
         update_option('nfinite_audit_last', $payload, false);
 
-        // Shape minimal UI for each device panel
         $out = array();
         if ( !empty($mobile['ok']) ) {
             $out['mobile'] = array(
@@ -356,8 +375,40 @@ class Nfinite_Audit_Admin {
     }
 
     /**
-     * Dashboard (PSI, Overall, Web Vitals, Section Scores)
-     * Site Health Digest has been moved to its own page.
+     * NEW: SEO Basics AJAX (runs ONLY when user clicks test on SEO page)
+     */
+    public static function ajax_run_seo_basics() {
+        if ( ! current_user_can('manage_options') ) wp_send_json_error(array('message' => 'Unauthorized'), 403);
+        check_ajax_referer('nfinite_run_seo_basics');
+
+        $url = isset($_POST['url']) ? esc_url_raw($_POST['url']) : '';
+        if ( empty($url) ) {
+            $url = home_url('/');
+        }
+
+        $result = Nfinite_Audit_V1::run_seo_basics($url);
+
+        // Persist last SEO-only payload separately from dashboard
+        $payload = array(
+            'timestamp' => current_time('Y-m-d H:i:s'),
+            'url'       => $result['url'],
+            'score'     => (int) $result['score'],
+            'grade'     => (string) $result['grade'],
+            'details'   => $result['details'],
+        );
+        update_option('nfinite_audit_seo_last', $payload, false);
+
+        wp_send_json_success(array(
+            'finalUrl' => $payload['url'],
+            'score'    => $payload['score'],
+            'grade'    => $payload['grade'],
+            'checks'   => $payload['details']['checks'],
+            'messages' => $payload['details']['messages'],
+        ));
+    }
+
+    /**
+     * Dashboard (NO SEO Basics section here anymore)
      */
     public static function render_dashboard_page() {
         if ( ! current_user_can('manage_options') ) return;
@@ -366,7 +417,6 @@ class Nfinite_Audit_Admin {
         $proxy    = get_option('nfinite_proxy_url','');
         $test_url = get_option('nfinite_test_url', home_url('/'));
         $last     = get_option('nfinite_audit_last', null);
-
         ?>
         <div class="wrap nfinite-wrap">
           <h1>Nfinite Audit</h1>
@@ -394,6 +444,7 @@ class Nfinite_Audit_Admin {
           <p class="nfinite-help">
             Looking for Site Health details? Visit the
             <a href="<?php echo esc_url( admin_url('admin.php?page=nfinite-audit-health') ); ?>">Site Health page</a>.
+            For SEO checks, use the <a href="<?php echo esc_url( admin_url('admin.php?page=nfinite-audit-seo') ); ?>">SEO Basics page</a>.
           </p>
 
           <?php $nonce = wp_create_nonce('nfinite_test_psi'); ?>
@@ -488,12 +539,14 @@ class Nfinite_Audit_Admin {
           })();
           </script>
 
+          <?php
+            $overall = isset($last['overall']) ? (int)$last['overall'] : 0;
+          ?>
           <h2 class="nfinite-section-title">Overall</h2>
           <section class="nfinite-section">
             <div class="nfinite-cards" style="grid-template-columns:1fr">
               <div class="nfinite-card">
                 <div class="nfinite-detail">
-                  <?php $overall = isset($last['overall']) ? (int)$last['overall'] : 0; ?>
                   <div style="text-align:center;margin:10px 0 12px 0">
                     <div class="nfinite-score" style="display:block;margin-bottom:6px"><?php echo esc_html($overall); ?></div>
                     <?php echo self::grade_badge($overall); ?>
@@ -508,7 +561,7 @@ class Nfinite_Audit_Admin {
                   <p><strong>Performance:</strong> <?php echo esc_html($perf); ?></p>
                   <p><strong>Best Practices:</strong> <?php echo esc_html($bp); ?></p>
                   <p><strong>SEO:</strong> <?php echo esc_html($seo); ?></p>
-                  <p class="nfinite-help">Overall score is the simple average of all available scores: Section Scores, Lighthouse category scores, and (when available) Web Vitals.</p>
+                  <p class="nfinite-help">Overall score is the simple average of Section Scores, Lighthouse category scores, and (when available) Web Vitals.</p>
                 </div>
               </div>
             </div>
@@ -691,100 +744,392 @@ class Nfinite_Audit_Admin {
         <?php
     }
 
+    public static function render_review_page() {
+        if ( ! current_user_can('manage_options') ) return;
+
+        $default_url = home_url('/');
+        $probe_url   = isset($_POST['nfa_probe_url']) ? esc_url_raw($_POST['nfa_probe_url']) : $default_url;
+
+        $force = false;
+        if ( isset($_POST['nfa_review_action']) && $_POST['nfa_review_action']==='refresh' && check_admin_referer('nfa_review_refresh') ) {
+            delete_transient('nfinite_review_last');
+            $force = true;
+        }
+
+        if ( ! class_exists('Nfinite_Review_Scanner') ) {
+            echo '<div class="wrap"><h1>Theme & Plugin Review</h1><div class="notice notice-error"><p>Scanner class not found.</p></div></div>';
+            return;
+        }
+
+        $report = Nfinite_Review_Scanner::run($probe_url, $force);
+        if ( ! empty($report['_debug']) ) {
+            echo '<p class="nfinite-help">Debug: head JS '.$report['_debug']['head_js'].' / CSS '.$report['_debug']['head_css'].' • foot JS '.$report['_debug']['foot_js'].' / CSS '.$report['_debug']['foot_css'].' • html JS '.$report['_debug']['html_js'].' / CSS '.$report['_debug']['html_css'].' • html bytes '.$report['_debug']['html_len'].'</p>';
+        }
+        ?>
+        <div class="wrap nfinite-wrap">
+          <h1>Theme & Plugin Review · Nfinite Audit</h1>
+
+          <div class="nfinite-card" style="margin:12px 0;">
+            <div class="nfinite-card__header">
+              <h2 class="nfinite-h" style="margin:0">Controls</h2>
+              <div style="display:flex;align-items:center;gap:10px">
+                <form method="post" action="<?php echo esc_url( admin_url('admin.php?page=nfinite-audit-review') ); ?>" style="margin:0;display:flex;gap:10px;align-items:center">
+                  <?php wp_nonce_field('nfa_review_refresh'); ?>
+                  <input type="url" name="nfa_probe_url" value="<?php echo esc_attr($probe_url); ?>" placeholder="https://example.com/page/" style="width:360px;max-width:100%;">
+                  <input type="hidden" name="nfa_review_action" value="refresh">
+                  <button class="button" type="submit">Refresh</button>
+                </form>
+                <span class="description">Last checked: <?php echo esc_html($report['refreshed'] ?? '—'); ?></span>
+              </div>
+            </div>
+            <div class="nfinite-detail">
+              <p class="nfinite-help">We analyze front-end assets (from the URL above), autoloaded options, common meta, and code size to identify heavy plugins and themes.</p>
+            </div>
+          </div>
+
+          <?php
+          $top = $report['top'] ?? array();
+          if ( empty($top) ) {
+              echo '<div class="notice notice-warning"><p>No assets were detected. If this persists, try a page that loads scripts (e.g., a product page), and ensure the probe URL is publicly reachable from the server.</p></div>';
+          } else {
+              echo '<section class="nfinite-section">';
+              echo '<h2 class="nfinite-section-title">Top Offenders</h2>';
+              echo '<div class="nfinite-cards full">';
+              foreach ($top as $row) {
+                  $badge = '<span class="nfinite-badge ' . esc_attr($row['grade']) . '">' . esc_html($row['grade']) . '</span>';
+                  echo '<div class="nfinite-card"><div class="nfinite-detail">';
+                  echo '<div class="nfinite-h" style="display:flex;justify-content:space-between;align-items:center;">';
+                  echo '<span>'. esc_html(ucfirst($row['type'])) .': '. esc_html($row['name']) . ( $row['version'] ? ' · v'.esc_html($row['version']) : '' ) .'</span>';
+                  echo $badge;
+                  echo '</div>';
+                  echo '<p><strong>Assets:</strong> ' . (int)$row['assets']['scripts'] . ' JS, ' . (int)$row['assets']['styles'] . ' CSS, ' . size_format((int)$row['assets']['bytes']) . '</p>';
+                  echo '<p><strong>Autoload:</strong> ' . size_format((int)$row['autoload_bytes']) . ' · <strong>Meta rows:</strong> ' . (int)$row['meta_rows'] . ' · <strong>Code size:</strong> ' . size_format((int)$row['code_bytes']) . '</p>';
+                  echo '<p class="nfinite-help">Score: ' . (int)$row['score'] . ' (lower is heavier; grade is normalized)</p>';
+                  echo '</div></div>';
+              }
+              echo '</div></section>';
+
+              echo '<section class="nfinite-section"><h2 class="nfinite-section-title">All measured items</h2>';
+              echo '<div class="nfinite-card"><div class="nfinite-detail"><table class="widefat striped"><thead><tr>';
+              echo '<th>Type</th><th>Name</th><th>Grade</th><th>JS</th><th>CSS</th><th>Asset bytes</th><th>Autoload</th><th>Meta rows</th><th>Code bytes</th><th>Score</th>';
+              echo '</tr></thead><tbody>';
+              foreach ($report['items'] as $row) {
+                  echo '<tr>';
+                  echo '<td>'.esc_html($row['type']).'</td>';
+                  echo '<td>'.esc_html($row['name']).'</td>';
+                  echo '<td><span class="nfinite-badge '.esc_attr($row['grade']).'">'.esc_html($row['grade']).'</span></td>';
+                  echo '<td>'.(int)$row['assets']['scripts'].'</td>';
+                  echo '<td>'.(int)$row['assets']['styles'].'</td>';
+                  echo '<td>'.esc_html( size_format((int)$row['assets']['bytes']) ).'</td>';
+                  echo '<td>'.esc_html( size_format((int)$row['autoload_bytes']) ).'</td>';
+                  echo '<td>'.(int)$row['meta_rows'].'</td>';
+                  echo '<td>'.esc_html( size_format((int)$row['code_bytes']) ).'</td>';
+                  echo '<td>'.(int)$row['score'].'</td>';
+                  echo '</tr>';
+              }
+              echo '</tbody></table></div></div></section>';
+          }
+          ?>
+        </div>
+        <?php
+    }
+
     /**
-     * NEW: Site Health page
+     * NEW: Site Health page (unchanged UI)
      */
     public static function render_health_page() {
         if ( ! current_user_can('manage_options') ) return;
 
-        // Handle refresh via POST or GET
+        if ( ! function_exists('nfinite_get_site_health_digest') ) {
+            $digest_file = dirname(__DIR__) . '/includes/site-health-digest.php';
+            if ( file_exists($digest_file) ) require_once $digest_file;
+        }
+
+        if ( ! function_exists('nfinite_get_site_health_digest') ) {
+            $digest_file = dirname(__DIR__) . '/includes/site-health-digest.php';
+            if ( file_exists($digest_file) ) require_once $digest_file;
+        }
+
         $did_refresh_digest = false;
         if (
             ( isset($_POST['nfinite_health_action']) && 'refresh' === $_POST['nfinite_health_action'] && check_admin_referer('nfinite_refresh_health') )
             ||
             ( isset($_GET['nfinite_health_action'], $_GET['_wpnonce']) && 'refresh' === $_GET['nfinite_health_action'] && wp_verify_nonce($_GET['_wpnonce'], 'nfinite_refresh_health') )
         ) {
-            // clear cache key(s) used by the helper
+            delete_transient('nfinite_site_health_digest_with_async');
+            delete_transient('nfinite_site_health_digest_direct_only');
             delete_transient('nfinite_site_health_digest');
-            delete_transient('nfinite_site_health_digest_v2'); // in case older key was used
+            delete_transient('nfinite_site_health_digest_v2');
             $did_refresh_digest = true;
         }
 
-        // Build/refresh digest now (force on refresh; otherwise use cache)
         $digest = function_exists('nfinite_get_site_health_digest')
-            ? nfinite_get_site_health_digest( $did_refresh_digest )
+            ? nfinite_get_site_health_digest( $did_refresh_digest, true )
             : array('error' => __('Site Health helper not loaded.', 'nfinite-audit'));
+
+        $items = isset($digest['items']) && is_array($digest['items']) ? $digest['items'] : array();
+        $crit  = array_values( array_filter( $items, function($it){ return isset($it['status']) && $it['status']==='critical'; }) );
+        $reco  = array_values( array_filter( $items, function($it){ return isset($it['status']) && $it['status']==='recommended'; }) );
+        $good  = array_values( array_filter( $items, function($it){ return isset($it['status']) && $it['status']==='good'; }) );
+
+        $render_group = function( $title, $count, $badge_class, $rows, $empty_msg ) {
+            ?>
+            <div class="nfinite-card">
+              <div class="nfinite-card__header">
+                <h2 class="nfinite-h" style="margin:0"><?php echo esc_html($title); ?></h2>
+                <span class="nfinite-badge <?php echo esc_attr($badge_class); ?>"><?php echo (int) $count; ?></span>
+              </div>
+              <div class="nfinite-list">
+                <?php if (empty($rows)): ?>
+                  <div class="nfinite-list__item">
+                    <div class="nfinite-detail"><em><?php echo esc_html($empty_msg); ?></em></div>
+                  </div>
+                <?php else: foreach ($rows as $it): ?>
+                  <div class="nfinite-list__item">
+                    <span class="<?php echo esc_attr( nfinite_health_status_class($it['status']) ); ?>">
+                      <?php echo esc_html( ucfirst($it['status']) ); ?>
+                    </span>
+                    <strong style="margin-left:8px;"><?php echo esc_html( $it['label'] ); ?></strong>
+                    <?php if ( ! empty($it['badge']) ) : ?>
+                      <span class="nfinite-badge nfinite-badge-muted" style="margin-left:8px;"><?php echo esc_html( $it['badge'] ); ?></span>
+                    <?php endif; ?>
+
+                    <?php if ( ! empty($it['description']) ) : ?>
+                      <div class="nfinite-detail"><?php echo $it['description']; ?></div>
+                    <?php endif; ?>
+
+                    <?php if ( ! empty($it['actions']) ) : ?>
+                      <div class="nfinite-detail"><?php echo $it['actions']; ?></div>
+                    <?php endif; ?>
+                  </div>
+                <?php endforeach; endif; ?>
+              </div>
+            </div>
+            <?php
+        };
         ?>
         <div class="wrap nfinite-wrap">
           <h1>Site Health · Nfinite Audit</h1>
 
           <p class="nfinite-help" style="margin-top:8px">
             <a class="button" href="<?php echo esc_url( admin_url('admin.php?page=nfinite-audit') ); ?>">← Back to Dashboard</a>
+            <a class="button" href="#critical">Jump to Critical</a>
+            <a class="button" href="#recommended">Jump to Recommended</a>
+            <a class="button" href="#passed">Jump to Passed</a>
           </p>
 
           <?php if ( $did_refresh_digest ) : ?>
             <div class="notice notice-success is-dismissible"><p>Site Health rechecked just now.</p></div>
           <?php endif; ?>
 
-          <?php
-          if ( isset($digest['error']) ) {
-              echo '<div class="notice notice-error"><p>' . esc_html($digest['error']) . '</p></div>';
-          } else {
-              ?>
-              <section class="nfinite-section">
-                <div class="nfinite-cards" style="grid-template-columns:1fr">
-                  <div class="nfinite-card">
-                    <div class="nfinite-card__header">
-                      <h2 class="nfinite-h" style="margin:0">Site Health Digest</h2>
-
-                      <div style="display:flex;align-items:center;gap:10px">
-                        <!-- POST button (primary) -->
-                        <form method="post" action="<?php echo esc_url( admin_url('admin.php?page=nfinite-audit-health') ); ?>" style="margin:0">
-                          <?php wp_nonce_field('nfinite_refresh_health'); ?>
-                          <input type="hidden" name="nfinite_health_action" value="refresh">
-                          <button class="button" type="submit" name="nfinite_health_submit" value="1">Refresh</button>
-                        </form>
-
-                        <!-- GET fallback (if POST blocked by security plugins) -->
-                        <?php
-                          $refresh_url = wp_nonce_url(
-                            add_query_arg(array('page'=>'nfinite-audit-health','nfinite_health_action'=>'refresh'), admin_url('admin.php')),
-                            'nfinite_refresh_health'
-                          );
-                        ?>
-                        <a class="button" href="<?php echo esc_url($refresh_url); ?>">Refresh (alt)</a>
-
-                        <span class="description">Last checked: <?php echo esc_html( $digest['refreshed'] ); ?></span>
-                      </div>
-                    </div>
-
-                    <div class="nfinite-list">
-                      <?php foreach ( $digest['items'] as $it ) : ?>
-                        <div class="nfinite-list__item">
-                          <span class="<?php echo esc_attr( nfinite_health_status_class($it['status']) ); ?>">
-                            <?php echo esc_html( ucfirst($it['status']) ); ?>
-                          </span>
-                          <strong style="margin-left:8px;"><?php echo esc_html( $it['label'] ); ?></strong>
-                          <?php if ( ! empty($it['badge']) ) : ?>
-                            <span class="nfinite-badge nfinite-badge-muted" style="margin-left:8px;"><?php echo esc_html( $it['badge'] ); ?></span>
-                          <?php endif; ?>
-
-                          <?php if ( ! empty($it['description']) ) : ?>
-                            <div class="nfinite-detail"><?php echo $it['description']; ?></div>
-                          <?php endif; ?>
-
-                          <?php if ( ! empty($it['actions']) ) : ?>
-                            <div class="nfinite-detail"><?php echo $it['actions']; ?></div>
-                          <?php endif; ?>
-                        </div>
-                      <?php endforeach; ?>
+          <?php if ( isset($digest['error']) ) : ?>
+            <div class="notice notice-error"><p><?php echo esc_html($digest['error']); ?></p></div>
+          <?php else : ?>
+            <section class="nfinite-section">
+              <div class="nfinite-cards" style="grid-template-columns:1fr">
+                <div class="nfinite-card">
+                  <div class="nfinite-card__header">
+                    <h2 class="nfinite-h" style="margin:0">Controls</h2>
+                    <div style="display:flex;align-items:center;gap:10px">
+                      <form method="post" action="<?php echo esc_url( admin_url('admin.php?page=nfinite-audit-health') ); ?>" style="margin:0">
+                        <?php wp_nonce_field('nfinite_refresh_health'); ?>
+                        <input type="hidden" name="nfinite_health_action" value="refresh">
+                        <button class="button" type="submit" name="nfinite_health_submit" value="1">Refresh</button>
+                      </form>
+                      <?php
+                        $refresh_url = wp_nonce_url(
+                          add_query_arg(array('page'=>'nfinite-audit-health','nfinite_health_action'=>'refresh'), admin_url('admin.php')),
+                          'nfinite_refresh_health'
+                        );
+                      ?>
+                      <a class="button" href="<?php echo esc_url($refresh_url); ?>">Refresh (alt)</a>
+                      <span class="description">
+                        Source: <?php echo isset($digest['source']) ? esc_html($digest['source']) : 'n/a'; ?>
+                        • Last checked: <?php echo esc_html( $digest['refreshed'] ?? '' ); ?>
+                        • Critical: <?php echo (int)($digest['counts']['critical'] ?? 0); ?>
+                        • Recommended: <?php echo (int)($digest['counts']['recommended'] ?? 0); ?>
+                        • Good: <?php echo (int)($digest['counts']['good'] ?? 0); ?>
+                      </span>
                     </div>
                   </div>
+                  <div class="nfinite-detail">
+                    <p class="nfinite-help" style="margin:8px 0 0">
+                      We group Site Health into <strong>Critical issues</strong>, <strong>Recommended improvements</strong>, and <strong>Passed checks</strong>.
+                    </p>
+                  </div>
                 </div>
-              </section>
-              <?php
-          }
+
+                <a id="critical"></a>
+                <?php $render_group('Critical issues', count($crit), 'nfinite-badge-danger', $crit, 'No critical issues found. 🎉'); ?>
+
+                <a id="recommended"></a>
+                <?php $render_group('Recommended improvements', count($reco), 'nfinite-badge-warn', $reco, 'No recommended improvements at the moment.'); ?>
+
+                <a id="passed"></a>
+                <?php $render_group('Passed checks', count($good), 'nfinite-badge-good', $good, 'No checks are currently marked as passed.'); ?>
+              </div>
+            </section>
+          <?php endif; ?>
+        </div>
+        <?php
+    }
+
+    /**
+     * NEW: Dedicated SEO Basics page & runner
+     */
+    public static function render_seo_page() {
+        if ( ! current_user_can('manage_options') ) return;
+
+        $default_url = get_option('nfinite_test_url', home_url('/'));
+        $last        = get_option('nfinite_audit_seo_last', null);
+        $nonce       = wp_create_nonce('nfinite_run_seo_basics');
+        ?>
+        <div class="wrap nfinite-wrap">
+          <h1>SEO Basics · Nfinite Audit</h1>
+          <p class="description">Quick SEO health check: Title, Meta Description, and H1. This test is separate from the dashboard audit.</p>
+
+          <div class="nfinite-card" style="margin:12px 0;">
+            <div class="nfinite-card__header">
+              <h2 class="nfinite-h" style="margin:0">Run SEO Basics Test</h2>
+            </div>
+            <div class="nfinite-detail">
+              <p>Enter a public URL (defaults to your homepage) and run the SEO Basics scan.</p>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <input type="url" id="nfinite-seo-url" value="<?php echo esc_attr($default_url); ?>" style="width:420px;max-width:100%;">
+                <button type="button" class="button button-primary" id="nfinite-seo-run">Run SEO Basics</button>
+                <span class="spinner" style="float:none;"></span>
+              </div>
+              <div id="nfinite-seo-results" style="margin-top:14px"></div>
+            </div>
+          </div>
+
+          <?php if ( $last ) :
+              $score = (int)($last['score'] ?? 0);
+              $grade = isset($last['grade']) ? $last['grade'] : Nfinite_Audit_V1::grade_from_score($score);
+              $checks = isset($last['details']['checks']) ? $last['details']['checks'] : array();
+              $messages = isset($last['details']['messages']) ? (array)$last['details']['messages'] : array();
+
+              $title_ok  = ! empty($checks['title']['exists']);
+              $title_len = $title_ok ? (int)$checks['title']['length'] : 0;
+
+              $meta_ok   = ! empty($checks['meta_description']['exists']);
+              $meta_len  = $meta_ok ? (int)$checks['meta_description']['length'] : 0;
+
+              $h1_count  = isset($checks['h1']['count']) ? (int)$checks['h1']['count'] : 0;
           ?>
+          <div class="nfinite-cards full">
+            <details class="nfinite-card" open>
+              <summary>
+                <span class="nfinite-h">Last Result</span>
+                <span class="nfinite-score"><?php echo $score; ?> <span class="nfinite-badge <?php echo esc_attr($grade); ?>"><?php echo esc_html($grade); ?></span></span>
+              </summary>
+              <div class="nfinite-detail">
+                <ul class="nfinite-bullets">
+                  <li><?php echo $title_ok ? '✓' : '✗'; ?> Title tag <?php echo $title_ok ? '(found, ' . $title_len . ' chars)' : 'missing'; ?></li>
+                  <li><?php echo $meta_ok ? '✓' : '✗'; ?> Meta description <?php echo $meta_ok ? '(found, ' . $meta_len . ' chars)' : 'missing'; ?></li>
+                  <li>
+                    <?php echo ( $h1_count === 1 ? '✓' : '✗' ); ?>
+                    H1
+                    <?php
+                      if ($h1_count === 0) echo 'not found';
+                      elseif ($h1_count === 1) echo 'single H1';
+                      else echo 'found ' . (int)$h1_count . ' H1 tags';
+                    ?>
+                  </li>
+                </ul>
+
+                <?php if ( ! empty($messages) ) : ?>
+                  <div class="nfinite-notes">
+                    <strong>Notes:</strong>
+                    <ul>
+                      <?php foreach ($messages as $m) : ?>
+                        <li><?php echo esc_html($m); ?></li>
+                      <?php endforeach; ?>
+                    </ul>
+                  </div>
+                <?php endif; ?>
+
+                <p class="nfinite-help">Last run: <?php echo esc_html($last['timestamp'] ?? '—'); ?> • URL: <?php echo esc_html($last['url'] ?? '—'); ?></p>
+
+                <div class="nfinite-cta-sm">
+                  <em>Want more SEO checks? Upgrade to Pro for canonical, robots meta, schema, and social cards.</em>
+                </div>
+              </div>
+            </details>
+          </div>
+          <?php endif; ?>
+
+          <script>
+          (function(){
+            const ajax   = "<?php echo esc_js(admin_url('admin-ajax.php')); ?>";
+            const nonce  = "<?php echo esc_js($nonce); ?>";
+            const runBtn = document.getElementById('nfinite-seo-run');
+            const input  = document.getElementById('nfinite-seo-url');
+            const out    = document.getElementById('nfinite-seo-results');
+            const spin   = runBtn.nextElementSibling;
+
+            function render(res){
+              const score = parseInt(res.score || 0);
+              const grade = res.grade || 'F';
+              const checks = res.checks || {};
+              const msgs = res.messages || [];
+
+              const titleOk = (checks.title && checks.title.exists) ? true : false;
+              const titleLen = titleOk ? parseInt(checks.title.length||0) : 0;
+
+              const metaOk = (checks.meta_description && checks.meta_description.exists) ? true : false;
+              const metaLen = metaOk ? parseInt(checks.meta_description.length||0) : 0;
+
+              const h1Count = (checks.h1 && typeof checks.h1.count !== 'undefined') ? parseInt(checks.h1.count) : 0;
+
+              out.innerHTML = `
+                <div class="nfinite-cards full">
+                  <details class="nfinite-card" open>
+                    <summary>
+                      <span class="nfinite-h">SEO Basics</span>
+                      <span class="nfinite-score">${score} <span class="nfinite-badge ${grade}">${grade}</span></span>
+                    </summary>
+                    <div class="nfinite-detail">
+                      <ul class="nfinite-bullets">
+                        <li>${titleOk ? '✓' : '✗'} Title tag ${titleOk ? '(found, ' + titleLen + ' chars)' : 'missing'}</li>
+                        <li>${metaOk ? '✓' : '✗'} Meta description ${metaOk ? '(found, ' + metaLen + ' chars)' : 'missing'}</li>
+                        <li>${(h1Count===1?'✓':'✗')} H1 ${h1Count===0?'not found':(h1Count===1?'single H1':'found '+h1Count+' H1 tags')}</li>
+                      </ul>
+                      ${msgs && msgs.length ? `
+                        <div class="nfinite-notes">
+                          <strong>Notes:</strong>
+                          <ul>${msgs.map(m=>`<li>${m.replace(/[<>&]/g, s => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[s]))}</li>`).join('')}</ul>
+                        </div>` : ''
+                      }
+                      <div class="nfinite-cta-sm"><em>Unlock Pro to scan canonical, robots meta, schema, and social cards.</em></div>
+                    </div>
+                  </details>
+                </div>
+              `;
+            }
+
+            runBtn.addEventListener('click', function(){
+              out.innerHTML = '';
+              spin.classList.add('is-active');
+              const fd = new FormData();
+              fd.append('action','nfinite_run_seo_basics');
+              fd.append('_ajax_nonce', nonce);
+              fd.append('url', (input.value||'').trim());
+              fetch(ajax, {method:'POST', body:fd, credentials:'same-origin'})
+                .then(r=>r.json())
+                .then(j=>{
+                  if (!j || !j.success) throw new Error(j && j.data && j.data.message ? j.data.message : 'Unknown error');
+                  render(j.data);
+                  // refresh to update "Last Result"
+                  setTimeout(function(){ try{ location.reload(); }catch(e){} }, 800);
+                })
+                .catch(err=>{
+                  out.innerHTML = '<div class="notice notice-error"><p>'+ String(err.message||err) +'</p></div>';
+                })
+                .finally(()=> spin.classList.remove('is-active'));
+            });
+          })();
+          </script>
         </div>
         <?php
     }
@@ -816,7 +1161,7 @@ class Nfinite_Audit_Admin {
     }
 
     /**
-     * Manual run handler (fallback when not using the on-page AJAX tester)
+     * Manual run handler (dashboard)
      */
     public static function handle_run_audit() {
         if ( ! current_user_can('manage_options') ) wp_die('Forbidden');
@@ -843,7 +1188,9 @@ class Nfinite_Audit_Admin {
         $finalUrl    = isset($psi['finalUrl']) ? $psi['finalUrl'] : $url;
 
         if ( ! $psi_ok ) {
-            $psi_scores   = nfinite_estimate_lighthouse($internal);
+            $psi_scores   = function_exists('nfinite_estimate_lighthouse')
+                ? nfinite_estimate_lighthouse($internal)
+                : array('performance'=>0,'best_practices'=>0,'seo'=>0,'_estimated'=>true);
             $web_vitals   = null;
             $lab_metrics  = array();
             $lab_overall  = null;
