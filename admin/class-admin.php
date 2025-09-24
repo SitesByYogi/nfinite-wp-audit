@@ -13,6 +13,8 @@ class Nfinite_Audit_Admin {
 
         // Actions
         add_action('admin_post_nfinite_run_audit_now', array(__CLASS__, 'handle_run_audit'));
+        add_action('admin_post_nfinite_export_json', [__CLASS__, 'handle_export_json']);
+
 
         // AJAX
         add_action('wp_ajax_nfinite_test_psi',        array(__CLASS__, 'ajax_test_psi'));
@@ -224,6 +226,35 @@ class Nfinite_Audit_Admin {
         return '<span class="nfinite-badge ' . esc_attr($grade) . '">' . esc_html($grade) . '</span>';
     }
 
+    // Alert if no page cache is detected in the last/internal audit payload.
+private static function maybe_show_cache_alert( $payload ) {
+    if ( ! is_array( $payload ) ) return;
+
+    // We expect the internal checks shape from run_internal_audit()
+    $checks = $payload['internal']['checks'] ?? array();
+
+    // Some pages may pass the sections/checks directly:
+    if ( empty( $checks ) && isset( $payload['checks'] ) ) {
+        $checks = $payload['checks'];
+    }
+
+    $cache   = $checks['cache_present'] ?? array();
+    $meta    = $cache['meta'] ?? array();
+    $cached  = isset( $meta['cached'] ) ? (bool) $meta['cached'] : null;
+    $score   = isset( $cache['score'] ) ? (int) $cache['score'] : null;
+
+    // Show notice if explicitly false OR scored 0.
+    if ( $cached === false || $score === 0 ) {
+        $docs = 'https://wordpress.org/plugins/search/cache/';
+        echo '<div class="notice notice-error is-dismissible">'
+            . '<p><strong>No page cache detected.</strong> Enabling a page cache (or CDN edge cache) is one of the biggest performance wins—'
+            . 'it lowers TTFB and server load. Install & configure a cache plugin (e.g., WP Rocket, LiteSpeed Cache, W3 Total Cache) '
+            . 'or enable caching at your host/CDN. '
+            . '<a href="' . esc_url( $docs ) . '" target="_blank" rel="noopener">Browse cache plugins</a>.</p>'
+            . '</div>';
+    }
+}
+
     /**
      * PSI AJAX (dashboard only)
      */
@@ -417,8 +448,16 @@ class Nfinite_Audit_Admin {
         $proxy    = get_option('nfinite_proxy_url','');
         $test_url = get_option('nfinite_test_url', home_url('/'));
         $last     = get_option('nfinite_audit_last', null);
+        self::maybe_show_cache_alert( $last ?: array() );
         ?>
         <div class="wrap nfinite-wrap">
+          <?php
+$export_url = wp_nonce_url(
+    admin_url('admin-post.php?action=nfinite_export_json&scope=dashboard'),
+    'nfinite_export_json'
+);
+?>
+<a class="button" href="<?php echo esc_url($export_url); ?>">Export JSON</a>
           <h1>Nfinite Audit</h1>
 
           <?php
@@ -982,6 +1021,9 @@ class Nfinite_Audit_Admin {
 
         $default_url = get_option('nfinite_test_url', home_url('/'));
         $last        = get_option('nfinite_audit_seo_last', null);
+        $audit = Nfinite_Audit_V1::run_internal_audit();
+        self::maybe_show_cache_alert( array( 'internal' => $audit ) );
+
         $nonce       = wp_create_nonce('nfinite_run_seo_basics');
         ?>
         <div class="wrap nfinite-wrap">
@@ -1227,4 +1269,42 @@ class Nfinite_Audit_Admin {
         wp_redirect( add_query_arg(array('page'=>'nfinite-audit','nfinite_done'=>'1'), admin_url('admin.php')) );
         exit;
     }
+/**
+ * Export the last stored results as JSON (Dashboard or SEO-only).
+ * Usage (link/button): admin-post.php?action=nfinite_export_json&scope=dashboard|seo&_wpnonce=...
+ */
+public static function handle_export_json() {
+    if ( ! current_user_can('manage_options') ) {
+        wp_die('Forbidden', 403);
+    }
+    check_admin_referer('nfinite_export_json');
+
+    // Which payload to export? default to dashboard.
+    $scope = isset($_GET['scope']) ? sanitize_key($_GET['scope']) : 'dashboard';
+
+    // If you keep SEO-only results separately, use a separate option key.
+    // Dashboard uses 'nfinite_audit_last'; SEO page can use 'nfinite_seo_last'.
+    if ( $scope === 'seo' ) {
+        $data = get_option('nfinite_seo_last', null);
+        $fname = 'nfinite-seo-basics.json';
+    } else {
+        $data = get_option('nfinite_audit_last', null);
+        $fname = 'nfinite-dashboard.json';
+    }
+
+    // Fallback if nothing is stored yet
+    if ( empty($data) ) {
+        $data = array('error' => 'No data available to export for scope: ' . $scope);
+    }
+
+    // Send as a file download
+    nocache_headers();
+    header('Content-Type: application/json; charset=utf-8');
+    header('Content-Disposition: attachment; filename="' . $fname . '"');
+    echo wp_json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+    exit;
 }
+
+}
+
+
