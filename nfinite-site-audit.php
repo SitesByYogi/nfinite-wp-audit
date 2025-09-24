@@ -2,13 +2,13 @@
 /*
 Plugin Name: Nfinite Site Audit
 Description: Lightweight site audit plugin with optional PageSpeed Insights integration.
-Version: 0.4.4
+Version: 0.4.5
 Author: Sites By Yogi
 */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define('NFINITE_AUDIT_VER', '0.4.4');
+define('NFINITE_AUDIT_VER', '0.4.5');
 define('NFINITE_AUDIT_PATH', plugin_dir_path(__FILE__));
 define('NFINITE_AUDIT_URL', plugin_dir_url(__FILE__));
 
@@ -25,6 +25,12 @@ require_once NFINITE_AUDIT_PATH . 'includes/class-review-scanner.php';
 
 // Add update alerts from GitHub
 require_once __DIR__ . '/vendor/plugin-update-checker/plugin-update-checker.php';
+
+// Try Composer autoload first (no fatal if missing)
+$composerAutoload = __DIR__ . '/vendor/autoload.php';
+if ( file_exists( $composerAutoload ) ) {
+    require_once $composerAutoload;
+}
 
 use YahnisElsts\PluginUpdateChecker\v5\PucFactory;
 
