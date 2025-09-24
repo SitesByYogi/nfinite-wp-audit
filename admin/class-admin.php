@@ -1,24 +1,35 @@
 <?php
 if ( ! defined( 'ABSPATH' ) ) exit;
 
+// If this file gets included twice, bail early.
+if ( class_exists( 'Nfinite_Audit_Admin' ) ) {
+    return;
+}
+
 class Nfinite_Audit_Admin {
+
+    protected static $booted = false;
 
     /**
      * Boot
      */
     public static function init() {
-        add_action('admin_menu',              array(__CLASS__, 'menu'));
-        add_action('admin_init',              array(__CLASS__, 'register_settings'));
-        add_action('admin_enqueue_scripts',   array(__CLASS__, 'enqueue_admin_css'));
+        if ( self::$booted ) {
+            return; // already initialized
+        }
+        self::$booted = true;
+
+        add_action('admin_menu',              [__CLASS__, 'menu']);
+        add_action('admin_init',              [__CLASS__, 'register_settings']);
+        add_action('admin_enqueue_scripts',   [__CLASS__, 'enqueue_admin_css']);
 
         // Actions
-        add_action('admin_post_nfinite_run_audit_now', array(__CLASS__, 'handle_run_audit'));
-        add_action('admin_post_nfinite_export_json', [__CLASS__, 'handle_export_json']);
-
+        add_action('admin_post_nfinite_run_audit_now', [__CLASS__, 'handle_run_audit']);
+        add_action('admin_post_nfinite_export_json',   [__CLASS__, 'handle_export_json']);
 
         // AJAX
-        add_action('wp_ajax_nfinite_test_psi',        array(__CLASS__, 'ajax_test_psi'));
-        add_action('wp_ajax_nfinite_run_seo_basics',  array(__CLASS__, 'ajax_run_seo_basics')); // NEW: SEO-only test
+        add_action('wp_ajax_nfinite_test_psi',       [__CLASS__, 'ajax_test_psi']);
+        add_action('wp_ajax_nfinite_run_seo_basics', [__CLASS__, 'ajax_run_seo_basics']);
 
         // Digest helper
         if ( ! function_exists('nfinite_get_site_health_digest') ) {
@@ -110,6 +121,36 @@ class Nfinite_Audit_Admin {
             'sanitize_callback' => 'esc_url_raw',
         ));
 
+        register_setting(
+    'nfinite_audit_group',
+    'nfinite_audit_purge_on_uninstall',
+    array(
+        'type'              => 'boolean',
+        'sanitize_callback' => function($v){ return !empty($v) ? 1 : 0; },
+        'default'           => 0,
+    )
+);
+
+        add_settings_section(
+        'nfinite_audit_data_section',
+        'Data & Uninstall',
+        function () {
+            echo '<p>Control what happens to saved data when the plugin is deleted.</p>';
+        },
+        'nfinite-audit-settings' // page slug used in your Settings page render
+    );
+
+    add_settings_field(
+        'nfinite_audit_purge_on_uninstall_field',
+        'Remove all plugin data on uninstall',
+        [__CLASS__, 'render_purge_checkbox'],
+        'nfinite-audit-settings',
+        'nfinite_audit_data_section',
+        array(
+            'label_for' => 'nfinite_audit_purge_on_uninstall',
+        )
+    );
+
         add_settings_section(
             'nfinite_audit_section_keys',
             'API & Connection',
@@ -146,6 +187,31 @@ class Nfinite_Audit_Admin {
             array('option' => 'nfinite_test_url', 'placeholder' => 'https://example.com')
         );
     }
+
+    public static function render_purge_checkbox( $args ) {
+    $id    = isset($args['label_for']) ? $args['label_for'] : 'nfinite_audit_purge_on_uninstall';
+    $value = (int) get_option('nfinite_audit_purge_on_uninstall', 0);
+
+    echo '<label for="'.esc_attr($id).'">';
+    echo '<input type="checkbox" id="'.esc_attr($id).'" name="nfinite_audit_purge_on_uninstall" value="1" '.checked(1, $value, false).' />';
+    echo ' <strong>Dangerous:</strong> Permanently delete all Nfinite Site Audit settings, cached results, and data when the plugin is deleted.';
+    echo '</label>';
+    echo '<p class="description">Keeps data by default. Enable only if you want a full cleanup on uninstall.</p>';
+}
+
+/** (Optional) If you add a Network Settings page, this saves the network-wide toggle. */
+public static function handle_network_save() {
+    if ( ! current_user_can('manage_network_options') ) {
+        wp_die( 'Unauthorized', 403 );
+    }
+    check_admin_referer( 'nfinite_audit_network_settings' );
+
+    $val = isset($_POST['nfinite_audit_purge_on_uninstall']) ? 1 : 0;
+    update_site_option( 'nfinite_audit_purge_on_uninstall', $val );
+
+    wp_safe_redirect( add_query_arg( array('page' => 'nfinite-audit-network', 'updated' => 'true'), network_admin_url('settings.php') ) );
+    exit;
+}
 
     /**
      * Generic text field renderer
@@ -1279,16 +1345,15 @@ public static function handle_export_json() {
     }
     check_admin_referer('nfinite_export_json');
 
-    // Which payload to export? default to dashboard.
+    // Determine which stored payload to export
     $scope = isset($_GET['scope']) ? sanitize_key($_GET['scope']) : 'dashboard';
 
-    // If you keep SEO-only results separately, use a separate option key.
-    // Dashboard uses 'nfinite_audit_last'; SEO page can use 'nfinite_seo_last'.
     if ( $scope === 'seo' ) {
-        $data = get_option('nfinite_seo_last', null);
+        $data  = get_option('nfinite_audit_seo_last', null);
         $fname = 'nfinite-seo-basics.json';
     } else {
-        $data = get_option('nfinite_audit_last', null);
+        // default: dashboard
+        $data  = get_option('nfinite_audit_last', null);
         $fname = 'nfinite-dashboard.json';
     }
 
@@ -1297,7 +1362,7 @@ public static function handle_export_json() {
         $data = array('error' => 'No data available to export for scope: ' . $scope);
     }
 
-    // Send as a file download
+    // Force download
     nocache_headers();
     header('Content-Type: application/json; charset=utf-8');
     header('Content-Disposition: attachment; filename="' . $fname . '"');

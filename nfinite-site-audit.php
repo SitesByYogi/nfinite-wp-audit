@@ -188,20 +188,6 @@ function nfinite_render_caching_layers_page() {
 }
 // ==== /Caching Layers ====
 
-
-// ==== Nfinite Audit → Settings (submenu restored) ====
-add_action('admin_menu', function () {
-    if ( ! function_exists('add_submenu_page') ) return;
-    add_submenu_page(
-        'nfinite-audit',
-        'Settings · Nfinite Audit',
-        'Settings',
-        'manage_options',
-        'nfinite-audit-settings',
-        'nfinite_render_settings_page'
-    );
-}, 40);
-
 function nfinite_render_settings_page() {
     if ( ! current_user_can('manage_options') ) return;
 
