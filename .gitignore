@@ -1,0 +1,71 @@
+# -----------------------------------------------------
+# WordPress plugin .gitignore
+# -----------------------------------------------------
+
+# OS / Editor junk
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Icon?
+desktop.ini
+*.swp
+*.swo
+*.swn
+*.bak
+*.tmp
+*.orig
+
+# IDE / Project files
+.vscode/
+.idea/
+*.iml
+
+# Composer / Node / Build
+/vendor/
+/node_modules/
+/bower_components/
+/packages/
+/dist/
+/build/
+/coverage/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+pnpm-lock.yaml
+
+# WordPress core (don’t commit full WP installs)
+/wp-admin/
+/wp-includes/
+/wp-content/themes/
+/wp-content/uploads/
+/wp-content/cache/
+/wp-content/upgrade/
+/wp-content/backups-*/
+
+# Only keep your plugin folder
+!wp-content/plugins/
+wp-content/plugins/*
+
+# Exclude everything under plugins except your plugin
+!wp-content/plugins/nfinite-site-audit/
+wp-content/plugins/nfinite-site-audit/*.zip
+
+# Logs
+*.log
+
+# Misc
+*.sql
+*.tar
+*.gz
+*.zip
+*.7z
+*.rar
+
+# -----------------------------------------------------
+# Notes:
+# - This keeps only your plugin folder tracked in Git.
+# - The plugin folder is: wp-content/plugins/nfinite-site-audit/
+# - Vendor folder is ignored, so if you want to deploy with it,
+#   bundle it into your release ZIP (not into GitHub).
+# -----------------------------------------------------

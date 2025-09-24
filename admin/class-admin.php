@@ -1371,5 +1371,3 @@ public static function handle_export_json() {
 }
 
 }
-
-
