@@ -2,13 +2,13 @@
 /*
 Plugin Name: Nfinite Site Audit
 Description: Lightweight site audit plugin with optional PageSpeed Insights integration.
-Version: 0.4.2
-Author: Nfinite
+Version: 0.4.4
+Author: Sites By Yogi
 */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define('NFINITE_AUDIT_VER', '0.4.2');
+define('NFINITE_AUDIT_VER', '0.4.4');
 define('NFINITE_AUDIT_PATH', plugin_dir_path(__FILE__));
 define('NFINITE_AUDIT_URL', plugin_dir_url(__FILE__));
 
@@ -23,6 +23,30 @@ require_once NFINITE_AUDIT_PATH . 'includes/site-health-digest.php';
 require_once NFINITE_AUDIT_PATH . 'includes/frontend-probe.php';
 require_once NFINITE_AUDIT_PATH . 'includes/class-review-scanner.php';
 
+// Add update alerts from GitHub
+require_once __DIR__ . '/vendor/plugin-update-checker/plugin-update-checker.php';
+
+use YahnisElsts\PluginUpdateChecker\v5\PucFactory;
+
+$updateChecker = PucFactory::buildUpdateChecker(
+    // Your actual repo URL (no trailing slash, no /tree/main)
+    'https://github.com/SitesByYogi/nfinite-wp-audit',
+    __FILE__,
+    // IMPORTANT: this must match your plugin FOLDER (the one in wp-content/plugins/)
+    // If your plugin lives in wp-content/plugins/nfinite-site-audit/, keep this exactly:
+    'nfinite-site-audit'
+);
+
+// Use the branch you release from
+$updateChecker->setBranch('main');
+
+// If you publish GitHub Releases with attached ZIPs, prefer those (nice UX, fewer build issues)
+if ( $api = $updateChecker->getVcsApi() ) {
+    $api->enableReleaseAssets();
+}
+
+// If the repo is private, uncomment and add a token with read:repo
+// $updateChecker->setAuthentication('ghp_xxx...');
 
 
 // Boot the admin UI
