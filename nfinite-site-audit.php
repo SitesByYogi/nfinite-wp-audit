@@ -2,13 +2,13 @@
 /*
 Plugin Name: Nfinite Site Audit
 Description: Lightweight site audit plugin with optional PageSpeed Insights integration.
-Version: 0.5.1
+Version: 0.5.2
 Author: Sites By Yogi
 */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define('NFINITE_AUDIT_VER', '0.5.1');
+define('NFINITE_AUDIT_VER', '0.5.2');
 define('NFINITE_AUDIT_PATH', plugin_dir_path(__FILE__));
 define('NFINITE_AUDIT_URL', plugin_dir_url(__FILE__));
 
