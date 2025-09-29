@@ -24,6 +24,7 @@ require_once NFINITE_AUDIT_PATH . 'includes/class-cache-layers-scanner.php';
 require_once NFINITE_AUDIT_PATH . 'admin/class-admin.php';
 require_once NFINITE_AUDIT_PATH . 'includes/site-health-digest.php';
 require_once NFINITE_AUDIT_PATH . 'includes/frontend-probe.php';
+require_once NFINITE_AUDIT_PATH . 'includes/site-info.php';
 require_once NFINITE_AUDIT_PATH . 'includes/class-review-scanner.php';
 
 /**
