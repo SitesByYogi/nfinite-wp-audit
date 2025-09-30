@@ -122,34 +122,34 @@ class Nfinite_Audit_Admin {
         ));
 
         register_setting(
-    'nfinite_audit_group',
-    'nfinite_audit_purge_on_uninstall',
-    array(
-        'type'              => 'boolean',
-        'sanitize_callback' => function($v){ return !empty($v) ? 1 : 0; },
-        'default'           => 0,
-    )
-);
+            'nfinite_audit_group',
+            'nfinite_audit_purge_on_uninstall',
+            array(
+                'type'              => 'boolean',
+                'sanitize_callback' => function($v){ return !empty($v) ? 1 : 0; },
+                'default'           => 0,
+            )
+        );
 
         add_settings_section(
-        'nfinite_audit_data_section',
-        'Data & Uninstall',
-        function () {
-            echo '<p>Control what happens to saved data when the plugin is deleted.</p>';
-        },
-        'nfinite-audit-settings' // page slug used in your Settings page render
-    );
+            'nfinite_audit_data_section',
+            'Data & Uninstall',
+            function () {
+                echo '<p>Control what happens to saved data when the plugin is deleted.</p>';
+            },
+            'nfinite-audit-settings'
+        );
 
-    add_settings_field(
-        'nfinite_audit_purge_on_uninstall_field',
-        'Remove all plugin data on uninstall',
-        [__CLASS__, 'render_purge_checkbox'],
-        'nfinite-audit-settings',
-        'nfinite_audit_data_section',
-        array(
-            'label_for' => 'nfinite_audit_purge_on_uninstall',
-        )
-    );
+        add_settings_field(
+            'nfinite_audit_purge_on_uninstall_field',
+            'Remove all plugin data on uninstall',
+            [__CLASS__, 'render_purge_checkbox'],
+            'nfinite-audit-settings',
+            'nfinite_audit_data_section',
+            array(
+                'label_for' => 'nfinite_audit_purge_on_uninstall',
+            )
+        );
 
         add_settings_section(
             'nfinite_audit_section_keys',
@@ -189,29 +189,29 @@ class Nfinite_Audit_Admin {
     }
 
     public static function render_purge_checkbox( $args ) {
-    $id    = isset($args['label_for']) ? $args['label_for'] : 'nfinite_audit_purge_on_uninstall';
-    $value = (int) get_option('nfinite_audit_purge_on_uninstall', 0);
+        $id    = isset($args['label_for']) ? $args['label_for'] : 'nfinite_audit_purge_on_uninstall';
+        $value = (int) get_option('nfinite_audit_purge_on_uninstall', 0);
 
-    echo '<label for="'.esc_attr($id).'">';
-    echo '<input type="checkbox" id="'.esc_attr($id).'" name="nfinite_audit_purge_on_uninstall" value="1" '.checked(1, $value, false).' />';
-    echo ' <strong>Dangerous:</strong> Permanently delete all Nfinite Site Audit settings, cached results, and data when the plugin is deleted.';
-    echo '</label>';
-    echo '<p class="description">Keeps data by default. Enable only if you want a full cleanup on uninstall.</p>';
-}
-
-/** (Optional) If you add a Network Settings page, this saves the network-wide toggle. */
-public static function handle_network_save() {
-    if ( ! current_user_can('manage_network_options') ) {
-        wp_die( 'Unauthorized', 403 );
+        echo '<label for="'.esc_attr($id).'">';
+        echo '<input type="checkbox" id="'.esc_attr($id).'" name="nfinite_audit_purge_on_uninstall" value="1" '.checked(1, $value, false).' />';
+        echo ' <strong>Dangerous:</strong> Permanently delete all Nfinite Site Audit settings, cached results, and data when the plugin is deleted.';
+        echo '</label>';
+        echo '<p class="description">Keeps data by default. Enable only if you want a full cleanup on uninstall.</p>';
     }
-    check_admin_referer( 'nfinite_audit_network_settings' );
 
-    $val = isset($_POST['nfinite_audit_purge_on_uninstall']) ? 1 : 0;
-    update_site_option( 'nfinite_audit_purge_on_uninstall', $val );
+    /** (Optional) If you add a Network Settings page, this saves the network-wide toggle. */
+    public static function handle_network_save() {
+        if ( ! current_user_can('manage_network_options') ) {
+            wp_die( 'Unauthorized', 403 );
+        }
+        check_admin_referer( 'nfinite_audit_network_settings' );
 
-    wp_safe_redirect( add_query_arg( array('page' => 'nfinite-audit-network', 'updated' => 'true'), network_admin_url('settings.php') ) );
-    exit;
-}
+        $val = isset($_POST['nfinite_audit_purge_on_uninstall']) ? 1 : 0;
+        update_site_option( 'nfinite_audit_purge_on_uninstall', $val );
+
+        wp_safe_redirect( add_query_arg( array('page' => 'nfinite-audit-network', 'updated' => 'true'), network_admin_url('settings.php') ) );
+        exit;
+    }
 
     /**
      * Generic text field renderer
@@ -237,7 +237,7 @@ public static function handle_network_save() {
             'nfinite-audit_page_nfinite-audit-settings',
             'nfinite-audit_page_nfinite-audit-health',
             'nfinite-audit_page_nfinite-audit-review',
-            'nfinite-audit_page_nfinite-audit-seo', // NEW: allow assets on SEO page
+            'nfinite-audit_page_nfinite-audit-seo', // SEO page
         );
         if ( ! in_array($hook, $allowed, true) ) return;
 
@@ -293,33 +293,33 @@ public static function handle_network_save() {
     }
 
     // Alert if no page cache is detected in the last/internal audit payload.
-private static function maybe_show_cache_alert( $payload ) {
-    if ( ! is_array( $payload ) ) return;
+    private static function maybe_show_cache_alert( $payload ) {
+        if ( ! is_array( $payload ) ) return;
 
-    // We expect the internal checks shape from run_internal_audit()
-    $checks = $payload['internal']['checks'] ?? array();
+        // We expect the internal checks shape from run_internal_audit()
+        $checks = $payload['internal']['checks'] ?? array();
 
-    // Some pages may pass the sections/checks directly:
-    if ( empty( $checks ) && isset( $payload['checks'] ) ) {
-        $checks = $payload['checks'];
+        // Some pages may pass the sections/checks directly:
+        if ( empty( $checks ) && isset( $payload['checks'] ) ) {
+            $checks = $payload['checks'];
+        }
+
+        $cache   = $checks['cache_present'] ?? array();
+        $meta    = $cache['meta'] ?? array();
+        $cached  = isset( $meta['cached'] ) ? (bool) $meta['cached'] : null;
+        $score   = isset( $cache['score'] ) ? (int) $cache['score'] : null;
+
+        // Show notice if explicitly false OR scored 0.
+        if ( $cached === false || $score === 0 ) {
+            $docs = 'https://wordpress.org/plugins/search/cache/';
+            echo '<div class="notice notice-error is-dismissible">'
+                . '<p><strong>No page cache detected.</strong> Enabling a page cache (or CDN edge cache) is one of the biggest performance wins—'
+                . 'it lowers TTFB and server load. Install & configure a cache plugin (e.g., WP Rocket, LiteSpeed Cache, W3 Total Cache) '
+                . 'or enable caching at your host/CDN. '
+                . '<a href="' . esc_url( $docs ) . '" target="_blank" rel="noopener">Browse cache plugins</a>.</p>'
+                . '</div>';
+        }
     }
-
-    $cache   = $checks['cache_present'] ?? array();
-    $meta    = $cache['meta'] ?? array();
-    $cached  = isset( $meta['cached'] ) ? (bool) $meta['cached'] : null;
-    $score   = isset( $cache['score'] ) ? (int) $cache['score'] : null;
-
-    // Show notice if explicitly false OR scored 0.
-    if ( $cached === false || $score === 0 ) {
-        $docs = 'https://wordpress.org/plugins/search/cache/';
-        echo '<div class="notice notice-error is-dismissible">'
-            . '<p><strong>No page cache detected.</strong> Enabling a page cache (or CDN edge cache) is one of the biggest performance wins—'
-            . 'it lowers TTFB and server load. Install & configure a cache plugin (e.g., WP Rocket, LiteSpeed Cache, W3 Total Cache) '
-            . 'or enable caching at your host/CDN. '
-            . '<a href="' . esc_url( $docs ) . '" target="_blank" rel="noopener">Browse cache plugins</a>.</p>'
-            . '</div>';
-    }
-}
 
     /**
      * PSI AJAX (dashboard only)
@@ -329,7 +329,15 @@ private static function maybe_show_cache_alert( $payload ) {
         check_ajax_referer('nfinite_test_psi');
 
         $url = isset($_POST['url']) ? esc_url_raw($_POST['url']) : '';
-        if ( empty($url) ) wp_send_json_error(array('message' => 'Missing URL'), 400);
+        if ( $url === '' ) {
+            $hint = function_exists('nfinite_get_default_test_placeholder')
+                ? nfinite_get_default_test_placeholder()
+                : home_url('/');
+            wp_send_json_error(
+                array('message' => sprintf('Please enter a URL to test. Tip: try your homepage, e.g. %s', esc_html($hint)) ),
+                400
+            );
+        }
 
         // Internal baseline (NO SEO in internal)
         $internal = Nfinite_Audit_V1::run_internal_audit($url);
@@ -479,8 +487,14 @@ private static function maybe_show_cache_alert( $payload ) {
         check_ajax_referer('nfinite_run_seo_basics');
 
         $url = isset($_POST['url']) ? esc_url_raw($_POST['url']) : '';
-        if ( empty($url) ) {
-            $url = home_url('/');
+        if ( $url === '' ) {
+            $hint = function_exists('nfinite_get_default_test_placeholder')
+                ? nfinite_get_default_test_placeholder()
+                : home_url('/');
+            wp_send_json_error(
+                array('message' => sprintf('Please enter a URL to test. Tip: try your homepage, e.g. %s', esc_html($hint)) ),
+                400
+            );
         }
 
         $result = Nfinite_Audit_V1::run_seo_basics($url);
@@ -510,20 +524,21 @@ private static function maybe_show_cache_alert( $payload ) {
     public static function render_dashboard_page() {
         if ( ! current_user_can('manage_options') ) return;
 
-        $api      = get_option('nfinite_psi_api_key','');
-        $proxy    = get_option('nfinite_proxy_url','');
-        $test_url = get_option('nfinite_test_url', home_url('/'));
-        $last     = get_option('nfinite_audit_last', null);
+        $api         = get_option('nfinite_psi_api_key','');
+        $proxy       = get_option('nfinite_proxy_url','');
+        $test_url    = get_option('nfinite_test_url', home_url('/')); // used for notices/links
+        $placeholder = function_exists('nfinite_get_default_test_placeholder') ? nfinite_get_default_test_placeholder() : home_url('/');
+        $last        = get_option('nfinite_audit_last', null);
         self::maybe_show_cache_alert( $last ?: array() );
         ?>
         <div class="wrap nfinite-wrap">
           <?php
-$export_url = wp_nonce_url(
-    admin_url('admin-post.php?action=nfinite_export_json&scope=dashboard'),
-    'nfinite_export_json'
-);
-?>
-<a class="button" href="<?php echo esc_url($export_url); ?>">Export JSON</a>
+          $export_url = wp_nonce_url(
+              admin_url('admin-post.php?action=nfinite_export_json&scope=dashboard'),
+              'nfinite_export_json'
+          );
+          ?>
+          <a class="button" href="<?php echo esc_url($export_url); ?>">Export JSON</a>
           <h1>Nfinite Audit</h1>
 
           <?php
@@ -556,7 +571,15 @@ $export_url = wp_nonce_url(
           <div class="nfinite-psi-test" style="margin:14px 0 20px">
             <h2 style="margin:0 0 8px">Test PageSpeed Insights</h2>
             <p>Enter a public URL, then run mobile &amp; desktop tests.</p>
-            <input type="url" id="nfinite-psi-url" value="<?php echo esc_attr($test_url); ?>" style="width:420px; max-width:100%;" />
+            <input
+              type="url"
+              id="nfinite-psi-url"
+              value=""
+              placeholder="<?php echo esc_attr($placeholder); ?>"
+              style="width:420px; max-width:100%;"
+              inputmode="url"
+              autocomplete="url"
+            />
             <button type="button" class="button button-primary" id="nfinite-psi-run">Run Test</button>
             <span class="spinner" style="float:none;"></span>
             <div id="nfinite-psi-results" style="margin-top:14px"></div>
@@ -564,12 +587,15 @@ $export_url = wp_nonce_url(
 
           <script>
           (function(){
-            const ajax  = "<?php echo esc_js(admin_url('admin-ajax.php')); ?>";
-            const nonce = "<?php echo esc_js($nonce); ?>";
+            const ajax     = "<?php echo esc_js(admin_url('admin-ajax.php')); ?>";
+            const nonce    = "<?php echo esc_js($nonce); ?>";
             const runBtn   = document.getElementById('nfinite-psi-run');
             const inputUrl = document.getElementById('nfinite-psi-url');
             const results  = document.getElementById('nfinite-psi-results');
-            const spinner  = runBtn.nextElementSibling;
+            const spinner  = runBtn ? runBtn.nextElementSibling : null;
+            const placeholder = "<?php echo esc_js($placeholder); ?>";
+
+            if (!runBtn || !inputUrl || !results) return;
 
             function card(label, data){
               const wrap = document.createElement('div');
@@ -617,11 +643,20 @@ $export_url = wp_nonce_url(
 
             runBtn.addEventListener('click', function(){
               results.innerHTML = '';
-              spinner.classList.add('is-active');
+
+              // Guard: require a URL; suggest homepage placeholder
+              const raw = (inputUrl.value || '').trim();
+              if (!raw) {
+                results.innerHTML = '<div class="notice notice-warning"><p>Please enter a URL to test. Tip: try your homepage (e.g., ' + placeholder + ').</p></div>';
+                return;
+              }
+
+              if (spinner) spinner.classList.add('is-active');
+
               const fd = new FormData();
               fd.append('action','nfinite_test_psi');
               fd.append('_ajax_nonce', nonce);
-              fd.append('url', inputUrl.value.trim());
+              fd.append('url', raw);
               fetch(ajax, {method:'POST', body:fd, credentials:'same-origin'})
                 .then(r=>r.json())
                 .then(j=>{
@@ -639,7 +674,7 @@ $export_url = wp_nonce_url(
                 .catch(err=>{
                   results.innerHTML = '<div class="notice notice-error"><p>'+ String(err.message||err) +'</p></div>';
                 })
-                .finally(()=> spinner.classList.remove('is-active'));
+                .finally(()=> { if (spinner) spinner.classList.remove('is-active'); });
             });
           })();
           </script>
@@ -1085,12 +1120,14 @@ $export_url = wp_nonce_url(
     public static function render_seo_page() {
         if ( ! current_user_can('manage_options') ) return;
 
-        $default_url = get_option('nfinite_test_url', home_url('/'));
-        $last        = get_option('nfinite_audit_seo_last', null);
+        $placeholder = function_exists('nfinite_get_default_test_placeholder')
+            ? nfinite_get_default_test_placeholder()
+            : home_url('/');
+        $last  = get_option('nfinite_audit_seo_last', null);
         $audit = Nfinite_Audit_V1::run_internal_audit();
         self::maybe_show_cache_alert( array( 'internal' => $audit ) );
 
-        $nonce       = wp_create_nonce('nfinite_run_seo_basics');
+        $nonce = wp_create_nonce('nfinite_run_seo_basics');
         ?>
         <div class="wrap nfinite-wrap">
           <h1>SEO Basics · Nfinite Audit</h1>
@@ -1103,7 +1140,15 @@ $export_url = wp_nonce_url(
             <div class="nfinite-detail">
               <p>Enter a public URL (defaults to your homepage) and run the SEO Basics scan.</p>
               <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-                <input type="url" id="nfinite-seo-url" value="<?php echo esc_attr($default_url); ?>" style="width:420px;max-width:100%;">
+                <input
+                  type="url"
+                  id="nfinite-seo-url"
+                  value=""
+                  placeholder="<?php echo esc_attr($placeholder); ?>"
+                  style="width:420px;max-width:100%;"
+                  inputmode="url"
+                  autocomplete="url"
+                >
                 <button type="button" class="button button-primary" id="nfinite-seo-run">Run SEO Basics</button>
                 <span class="spinner" style="float:none;"></span>
               </div>
@@ -1174,7 +1219,10 @@ $export_url = wp_nonce_url(
             const runBtn = document.getElementById('nfinite-seo-run');
             const input  = document.getElementById('nfinite-seo-url');
             const out    = document.getElementById('nfinite-seo-results');
-            const spin   = runBtn.nextElementSibling;
+            const spin   = runBtn ? runBtn.nextElementSibling : null;
+            const placeholder = "<?php echo esc_js($placeholder); ?>";
+
+            if (!runBtn || !input || !out) return;
 
             function render(res){
               const score = parseInt(res.score || 0);
@@ -1218,11 +1266,20 @@ $export_url = wp_nonce_url(
 
             runBtn.addEventListener('click', function(){
               out.innerHTML = '';
-              spin.classList.add('is-active');
+
+              // Guard: require a URL; suggest homepage placeholder
+              const raw = (input.value || '').trim();
+              if (!raw) {
+                out.innerHTML = '<div class="notice notice-warning"><p>Please enter a URL to test. Tip: you can paste your homepage (e.g., ' + placeholder + ').</p></div>';
+                return; // stop here; no request
+              }
+
+              if (spin) spin.classList.add('is-active');
+
               const fd = new FormData();
               fd.append('action','nfinite_run_seo_basics');
               fd.append('_ajax_nonce', nonce);
-              fd.append('url', (input.value||'').trim());
+              fd.append('url', raw);
               fetch(ajax, {method:'POST', body:fd, credentials:'same-origin'})
                 .then(r=>r.json())
                 .then(j=>{
@@ -1234,7 +1291,7 @@ $export_url = wp_nonce_url(
                 .catch(err=>{
                   out.innerHTML = '<div class="notice notice-error"><p>'+ String(err.message||err) +'</p></div>';
                 })
-                .finally(()=> spin.classList.remove('is-active'));
+                .finally(()=> { if (spin) spin.classList.remove('is-active'); });
             });
           })();
           </script>
@@ -1335,39 +1392,40 @@ $export_url = wp_nonce_url(
         wp_redirect( add_query_arg(array('page'=>'nfinite-audit','nfinite_done'=>'1'), admin_url('admin.php')) );
         exit;
     }
-/**
- * Export the last stored results as JSON (Dashboard or SEO-only).
- * Usage (link/button): admin-post.php?action=nfinite_export_json&scope=dashboard|seo&_wpnonce=...
- */
-public static function handle_export_json() {
-    if ( ! current_user_can('manage_options') ) {
-        wp_die('Forbidden', 403);
+
+    /**
+     * Export the last stored results as JSON (Dashboard or SEO-only).
+     * Usage (link/button): admin-post.php?action=nfinite_export_json&scope=dashboard|seo&_wpnonce=...
+     */
+    public static function handle_export_json() {
+        if ( ! current_user_can('manage_options') ) {
+            wp_die('Forbidden', 403);
+        }
+        check_admin_referer('nfinite_export_json');
+
+        // Determine which stored payload to export
+        $scope = isset($_GET['scope']) ? sanitize_key($_GET['scope']) : 'dashboard';
+
+        if ( $scope === 'seo' ) {
+            $data  = get_option('nfinite_audit_seo_last', null);
+            $fname = 'nfinite-seo-basics.json';
+        } else {
+            // default: dashboard
+            $data  = get_option('nfinite_audit_last', null);
+            $fname = 'nfinite-dashboard.json';
+        }
+
+        // Fallback if nothing is stored yet
+        if ( empty($data) ) {
+            $data = array('error' => 'No data available to export for scope: ' . $scope);
+        }
+
+        // Force download
+        nocache_headers();
+        header('Content-Type: application/json; charset=utf-8');
+        header('Content-Disposition: attachment; filename="' . $fname . '"');
+        echo wp_json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+        exit;
     }
-    check_admin_referer('nfinite_export_json');
-
-    // Determine which stored payload to export
-    $scope = isset($_GET['scope']) ? sanitize_key($_GET['scope']) : 'dashboard';
-
-    if ( $scope === 'seo' ) {
-        $data  = get_option('nfinite_audit_seo_last', null);
-        $fname = 'nfinite-seo-basics.json';
-    } else {
-        // default: dashboard
-        $data  = get_option('nfinite_audit_last', null);
-        $fname = 'nfinite-dashboard.json';
-    }
-
-    // Fallback if nothing is stored yet
-    if ( empty($data) ) {
-        $data = array('error' => 'No data available to export for scope: ' . $scope);
-    }
-
-    // Force download
-    nocache_headers();
-    header('Content-Type: application/json; charset=utf-8');
-    header('Content-Disposition: attachment; filename="' . $fname . '"');
-    echo wp_json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
-    exit;
-}
 
 }

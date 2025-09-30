@@ -2,13 +2,13 @@
 /*
 Plugin Name: Nfinite Site Audit
 Description: Lightweight site audit plugin with optional PageSpeed Insights integration.
-Version: 0.5.2
+Version: 0.5.3
 Author: Sites By Yogi
 */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define('NFINITE_AUDIT_VER', '0.5.2');
+define('NFINITE_AUDIT_VER', '0.5.3');
 define('NFINITE_AUDIT_PATH', plugin_dir_path(__FILE__));
 define('NFINITE_AUDIT_URL', plugin_dir_url(__FILE__));
 
@@ -17,7 +17,9 @@ define('NFINITE_AUDIT_URL', plugin_dir_url(__FILE__));
  * Core includes (order matters)
  * ------------------------------------------------------------
  */
-require_once NFINITE_AUDIT_PATH . 'includes/class-audit-v1.php';
+
+require_once NFINITE_AUDIT_PATH . 'includes/class-audit-v1.php';// Helpers (must load early)
+require_once NFINITE_AUDIT_PATH . 'includes/helpers.php';
 require_once NFINITE_AUDIT_PATH . 'includes/psi.php';
 require_once NFINITE_AUDIT_PATH . 'includes/fallback-scores.php';
 require_once NFINITE_AUDIT_PATH . 'includes/class-cache-layers-scanner.php';
